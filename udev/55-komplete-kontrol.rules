@@ -1,0 +1,14 @@
+> Note: on NixOS do not copy this file into /etc/udev/rules.d - that path is a
+> read-only symlink into the Nix store, so the file would not survive (or even
+> apply). Use the NixOS module of the flake, or put the same lines into
+> `services.udev.extraRules`, and add `boot.kernelModules = [ "uinput" ]`
+> (NixOS also has `hardware.uinput.enable = true`, which does both the module
+> and a /dev/uinput rule for the group `uinput`).
+
+# Allow members of the group `audio` to access this device.
+# Komplete Kontrol A25 (17cc:1730)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="17cc", ATTRS{idProduct}=="1730", MODE="0660", GROUP="audio"
+KERNEL=="hiddev*", ATTRS{idVendor}=="17cc", ATTRS{idProduct}=="1730", MODE="0660", GROUP="audio"
+# Komplete Kontrol A49 (17cc:1740), also used for the A61
+SUBSYSTEM=="usb", ATTRS{idVendor}=="17cc", ATTRS{idProduct}=="1740", MODE="0660", GROUP="audio"
+KERNEL=="hiddev*", ATTRS{idVendor}=="17cc", ATTRS{idProduct}=="1740", MODE="0660", GROUP="audio"

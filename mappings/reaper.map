@@ -1,0 +1,152 @@
+# ---------------------------------------------------------------------------
+# Reaper mapping for the Komplete Kontrol A-series (komplement)
+#
+# Usage (Komplete Kontrol A49, USB 17cc:1740):
+#   komplement -m mappings/reaper.map -p 1740 -o /dev/uinput
+#
+# The default product ID in komplement is 1730 (A25); the A49 reports 1740,
+# check your own with: lsusb | grep -i 17cc
+#
+# Every entry maps a button on the keyboard to one or more keystrokes which
+# komplement sends through /dev/uinput. Reaper must have the keyboard focus,
+# the keys below are the stock Reaper (Main section) shortcuts.
+#
+# Buttons are named as in doc/Supported_Keys.md. "Shift+X" entries are active
+# while the SHIFT button (index 0) is held down.
+#
+# Two of the actions below have no stock Reaper shortcut and must be bound
+# once in Reaper (Actions list, shortcut "?") - the key is given here, the
+# action name is in the comment:
+#   Metro : Ctrl+Shift+M   ->  Options: Toggle metronome
+#   Solo  : Alt+Shift+S    ->  Track: Toggle solo for selected tracks
+#
+# Transport ------------------------------------------------------------------
+# Space = play/stop (same toggle as the Reaper transport wheel); use Shift+Play
+# for play/pause, Shift+Stop to jump to the project start.
+Play=Space
+Stop=Space
+Record=LeftCtrl,R
+Shift+Play=LeftCtrl,Space
+Shift+Stop=W
+Shift+Record=LeftCtrl,LeftAlt,B
+
+# Editing --------------------------------------------------------------------
+# Quantize = split items at the edit cursor, Ideas = insert a marker (markers
+# are the closest thing to a scratch pad in Reaper), Shift+Ideas asks for the
+# marker name so it can double as a note.
+Undo=LeftCtrl,Z
+Shift+Undo=LeftCtrl,LeftShift,Z
+Quantize=S
+Shift+Quantize=Q
+Ideas=M
+Shift+Ideas=LeftShift,M
+
+# Grid and edit modes --------------------------------------------------------
+# Scale = snapping, Arp = ripple editing, with SHIFT the grid display and
+# auto-crossfading.
+Scale=LeftAlt,S
+Shift+Scale=LeftAlt,G
+Arp=LeftAlt,P
+Shift+Arp=LeftAlt,X
+
+# Loop and metronome ---------------------------------------------------------
+Loop=R
+Shift+Loop=LeftCtrl,LeftAlt,L
+Metro=LeftCtrl,LeftShift,M
+Shift+Metro=LeftAlt,L
+
+# Tempo and project ----------------------------------------------------------
+Tempo=LeftShift,C
+Shift+Tempo=LeftAlt,Enter
+
+# Tracks ---------------------------------------------------------------------
+# Preset Up/Down walk the track list; with SHIFT they extend the track
+# selection instead of replacing it. Mute = Alt+M is the stock Reaper toggle.
+Preset Up=LeftCtrl,LeftAlt,Up
+Preset Down=LeftCtrl,LeftAlt,Down
+Shift+Preset Up=LeftCtrl,LeftAlt,LeftShift,Up
+Shift+Preset Down=LeftCtrl,LeftAlt,LeftShift,Down
+Track=LeftCtrl,T
+Mute=LeftAlt,M
+Solo=LeftAlt,LeftShift,S
+
+# Browser and plug-ins -------------------------------------------------------
+# Browser = media explorer (audition loops), Plug-In = FX chain of the
+# selected item/take, with SHIFT the FX browser and the external editor.
+Browser=LeftCtrl,LeftAlt,X
+Shift+Browser=LeftShift,F
+Plug-In=LeftShift,E
+Shift+Plug-In=LeftCtrl,LeftAlt,E
+
+# Zoom -----------------------------------------------------------------------
+# Octave Down/Up zoom the arrangement horizontally, with SHIFT they change the
+# track height.
+Octave Down=Minus
+Octave Up=Equal
+Shift+Octave Down=PageDown
+Shift+Octave Up=PageUp
+
+# Jog ------------------------------------------------------------------------
+# Turning the 4D dial moves the edit cursor, and while playing the play
+# position follows it. One click steps by grid division (Ctrl+Shift+Left/Right
+# = "Move cursor left/right to grid division"), holding SHIFT steps by a small
+# amount instead (plain Left/Right = "Move cursor left/right").
+#
+# If "fast" and "fine" feel swapped, the other way round is Ctrl+Left /
+# Ctrl+Right ("Rewind a little bit" / "Fast forward a little bit"), which seek
+# the play position directly.
+4D CCW=LeftCtrl,LeftShift,Left
+4D CW=LeftCtrl,LeftShift,Right
+Shift+4D CCW=Left
+Shift+4D CW=Right
+
+# 4D dial and the rotary touch sensors ----------------------------------------
+# The bit values behind these names were measured on an A49, see
+# doc/Captured_Codes.md. Up/Down walk the track list, Left/Right nudge the time
+# selection, 4D Button toggles the selected track's volume envelope, and the
+# 4D dial jogs the edit/play cursor - all stock Reaper shortcuts.
+#
+# (Until the payload's fifth byte was decoded these could not fire at all: the
+# scan loop stopped at button 20.)
+4D Up=LeftCtrl,LeftAlt,Up
+4D Down=LeftCtrl,LeftAlt,Down
+4D Left=Comma
+4D Right=Dot
+4D Button=V
+
+# Knobs ----------------------------------------------------------------------
+# The touch sensors are momentary, so a touch reads as a tap.
+#
+# Touching a knob selects the matching track: with no SHIFT, knob N sends
+# Ctrl+Alt+N, bound in Reaper to "Track: Select track 01" .. "08".
+#
+# With SHIFT held on the keyboard, knob N sends Ctrl+Shift+Alt+N, which is
+# meant for "Track: Select track 09" .. "16" - the second bank of eight tracks.
+#
+# Turning a knob is *not* routed through komplement: the knobs send MIDI CC
+# 14..21 (channel 1, one CC per knob, absolute values - see
+# doc/Captured_Codes.md). Reaper learns those straight to
+# "Track: Set volume for track 01..08 (MIDI CC/OSC only)", so a knob always
+# drives its own track no matter what is selected. (The alternative is to have
+# this tool read the CCs and send volume nudges instead.)
+#
+# All four combinations (Ctrl+Alt+N, Ctrl+Shift+Alt+N) are free in GNOME's
+# window manager and in Reaper's stock keymap, including the MIDI editor.
+Rotary1=LeftCtrl,LeftAlt,1
+Rotary2=LeftCtrl,LeftAlt,2
+Rotary3=LeftCtrl,LeftAlt,3
+Rotary4=LeftCtrl,LeftAlt,4
+Rotary5=LeftCtrl,LeftAlt,5
+Rotary6=LeftCtrl,LeftAlt,6
+Rotary7=LeftCtrl,LeftAlt,7
+Rotary8=LeftCtrl,LeftAlt,8
+Shift+Rotary1=LeftCtrl,LeftShift,LeftAlt,1
+Shift+Rotary2=LeftCtrl,LeftShift,LeftAlt,2
+Shift+Rotary3=LeftCtrl,LeftShift,LeftAlt,3
+Shift+Rotary4=LeftCtrl,LeftShift,LeftAlt,4
+Shift+Rotary5=LeftCtrl,LeftShift,LeftAlt,5
+Shift+Rotary6=LeftCtrl,LeftShift,LeftAlt,6
+Shift+Rotary7=LeftCtrl,LeftShift,LeftAlt,7
+Shift+Rotary8=LeftCtrl,LeftShift,LeftAlt,8
+
+# Button34..Button39 were silent on the A49 (nothing in the payload either).

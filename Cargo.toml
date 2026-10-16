@@ -1,0 +1,17 @@
+[package]
+name = "kontrol-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Komplete Kontrol A-series HID keyboard remapper, ported to Rust"
+license = "MIT"
+
+[dependencies]
+libc = "0.2"
+alsa = "0.12"
+# uinput only; the udev feature (device enumeration) is not needed here.
+evdev = { version = "0.13", default-features = false }
+# Link the system hidapi with the libusb backend, exactly like the C tool does.
+hidapi = { version = "2", default-features = false, features = ["linux-shared-libusb"] }
+
+[profile.release]
+strip = true

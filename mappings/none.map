@@ -1,0 +1,7 @@
+# An empty mapping: every button is parsed but nothing is mapped, so the tool
+# does not send any key presses. Useful while capturing HID packets (-d) from
+# a terminal or while the DAW is in the foreground, e.g.:
+#
+#   komplement -m none.map -p 1740 -d
+#
+# No entries on purpose.
