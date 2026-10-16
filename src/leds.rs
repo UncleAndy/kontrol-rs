@@ -71,10 +71,11 @@ impl Leds {
         }
     }
 
-    /// Sends the LED report. Returns false when the device did not accept it
-    /// (the C tool uses this to detect that the device cannot be opened).
-    pub fn sync(&self, hid: &Hid) -> bool {
-        hid.write_raw(&self.buffer) >= 0
+    /// Sends the LED report. The error text is the one hidapi gave, so a
+    /// failure can be told apart from "the device could not be opened at all"
+    /// (the C tool prints the same message for both, which hides the cause).
+    pub fn sync(&self, hid: &Hid) -> Result<(), String> {
+        hid.write_raw(&self.buffer).map(|_| ())
     }
 
     /// The wipe from right to left, then everything off - what the tool plays
@@ -93,7 +94,9 @@ impl Leds {
                     }
                 }
             }
-            self.sync(hid);
+            // The animations are decorative: a failed report is caught (and
+            // reported) by the light-up right after them.
+            let _ = self.sync(hid);
             sleep(ANIMATE_DELAY);
         }
 
@@ -104,13 +107,13 @@ impl Leds {
     pub fn animate_off(&mut self, hid: &Hid) {
         for i in 0..TOTAL_HID_BUTTONS {
             self.update(i as i32, LED_OFF);
-            self.sync(hid);
+            let _ = self.sync(hid);
             sleep(ANIMATE_OFF_DELAY);
         }
     }
 
     pub fn off(&mut self, hid: &Hid) {
         self.clear();
-        self.sync(hid);
+        let _ = self.sync(hid);
     }
 }

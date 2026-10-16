@@ -12,15 +12,20 @@ use kontrol_rs::preset::{build_sysex, parse_file, NAME_SZ};
 use kontrol_rs::GetOpt;
 
 fn print_usage(argv0: &str) {
+    // Flush left on purpose: line continuations would strip the indentation.
     println!(
-        "{KONFIGURE_NAME} v{KONFIGURE_VERSION} by @hvangalen@mastodon.nl\n\n\
-This utility generates SysEx to configure Komplete Kontrol A-series keyboards.\n\n\
-Usage: {argv0} <options> -p path/to/preset.pst\n\n\
-Options:\n\
- -p <path>    Path to preset definition.\n\
- -o <path>    Write SysEx to this file in stead of standard out.\n\
- -m <port>    Write SysEx directly to this ALSA MIDI port.\n\
- -q           Be less verbose.\n\n\
+        "{KONFIGURE_NAME} v{KONFIGURE_VERSION} by @hvangalen@mastodon.nl
+
+This utility generates SysEx to configure Komplete Kontrol A-series keyboards.
+
+Usage: {argv0} <options> -p path/to/preset.pst
+
+Options:
+ -p <path>    Path to preset definition.
+ -o <path>    Write SysEx to this file in stead of standard out.
+ -m <port>    Write SysEx directly to this ALSA MIDI port.
+ -q           Be less verbose.
+
 {RISK_DISCLAIMER}"
     );
 }

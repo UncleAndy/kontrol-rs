@@ -30,13 +30,16 @@ pub mod buttons;
 pub mod config;
 pub mod defs;
 pub mod engine;
+pub mod font;
 pub mod hid;
 pub mod hid_dump;
 pub mod keys;
 pub mod leds;
 pub mod mapping;
 pub mod mmc;
+pub mod nav;
 pub mod preset;
+pub mod screen;
 pub mod uinput;
 
 /// Parses the options of `komplement` in the same way `getopt()` does in the C

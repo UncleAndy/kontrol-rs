@@ -65,12 +65,53 @@ konfigure -q -p presets/basic_cc.pst > my_template.syx   # send it to the keyboa
 
 `komplement` options: `-m <mapping>` (required to be useful), `-p <productId>`, `-v <vendorId>`,
 `-o <uinput path>`, `-a` (no ALSA port), `-n` (no LED animation), `-q` (quiet), `-d` (dump HID
-reports), `-h`.
+reports), `-l` (list the HID devices the system exposes and exit), `-s` (probe the keyboard's
+display), `-h`.
 `konfigure` options: `-p <preset>`, `-o <file>`, `-m <alsa port>`, `-q`, `-h`.
+
+`komplement -l` needs neither a mapping file nor the keyboard: it prints every HID device the
+system exposes (the keyboard's vendor id first, the one matching `-v`/`-p` marked) with its USB
+ids, interfaces and paths. Use it to find out which ids and how many interfaces the keyboard has
+- on Linux hidapi does not fill in the interface number, so the path's last component is the one
+to look at (`...:0003:0001:00` is interface 0).
+
+`komplement -s -p 1740` probes the keyboard's display. It disables the keyboard's own display
+logic (`a0 03 04`, as in `doc/kontrol_usb_re.cpp`) and then shows coarse states only - the whole
+screen bright, the whole screen dark, upper half, lower half, left half, right half, each followed
+by its opposite - asking a yes/no question after each one. Single pixels and thin lines are
+invisible on this screen, so the layout is measured with states big enough to see; the last step
+tries the text report guessed at in `doc/mini-screen.txt` on a cleared screen, checks that the
+keys still arrive, and puts the device back into MIDI mode (`a0 07 00`). Without `-s` the display
+is never touched.
+
+The frame is 128x32 at one bit per pixel: two reports (`e0 00 00 <page> 00 80 00 02 00` + 256 bytes,
+with `<page>` 0 and 2), one byte per column of eight pixels, bit 0 the top row of its page. The panel
+is **inverted** - a set bit is a dark pixel, which is why all-zero payloads light the whole screen -
+so `screen::report` complements the payload and frames in the code keep the natural convention (a set
+bit is a lit pixel). Only those two offsets are meaningful: other values can leave the panel stuck
+fully lit, and replugging the keyboard is what clears that.
+
+`komplement -S <state> -p 1740` shows one named state and waits (Enter, or 10 s without a terminal),
+so a state can be looked at or photographed: `on, off, top, bottom, left, right, vstripes, hstripes,
+border, message, nav, navmid, navbig, text60`. `message` draws four lines with the built-in 5x7 font
+(`src/font.rs`, 21 characters per line, lines at pixel rows 0, 8, 16 and 24) and is the end-to-end
+check of the renderer; `nav`, `navmid` and `navbig` draw the navigation screen for a sample track in
+three sizes (laid out in `src/nav.rs`): four small lines with a bar, three lines with a double-size
+value, and two double-size lines; `text60` is the text protocol guessed at in `doc/mini-screen.txt` -
+it was measured on hardware and does nothing, so the port does not depend on it.
 
 The keyboard needs read/write permission for the user running `komplement`, and `/dev/uinput`
 needs write permission for sending keystrokes. There is a NixOS module for that (below); the C
 project's `README.md` and `udev/55-komplete-kontrol.rules` describe the manual route.
+
+Do it with **group rights, not ACLs**: `komplement` opens `/dev/uinput` read-write, so an ACL
+entry left by `setfacl -m u:<user>:w` (write only, no read) makes the open fail with
+`Permission denied` even though `ls -l` shows `crw-rw---- root audio`. Check with
+`getfacl /dev/uinput`, or better by trying the access itself
+(`[ -r /dev/uinput ] && [ -w /dev/uinput ]` - with an ACL present the mode's group field shows the
+mask, not the group's rights, so `ls -l` is misleading). Clear leftovers with
+`sudo setfacl -b /dev/uinput && sudo chmod 660 /dev/uinput`; the udev rule
+(`GROUP="audio"`, `MODE="0660"`) gives the group everything that is needed.
 
 ## Mapping files
 
@@ -115,6 +156,12 @@ was attached while porting).
   it elsewhere.
 * A row with more than four keys is capped and reported (`more than 4 keys, ignoring ...`)
   instead of writing past the fixed-size array the C tool has.
+* Diagnosing a failure is deliberately different: the C tool prints "Opening the HID device
+  ... failed" both when the device cannot be opened *and* when it opens but LED writes are
+  refused, which hides the cause. Here the two are separate messages, the reason hidapi gave
+  is included, and a failed open also lists the devices the HID layer can see with that vendor
+  id - so "not present / wrong `-p` mode" is told apart from "present but held by something
+  else".
 * Report/usage text is the same, except that the wording of a missing mapping file says "nor
   in the mappings folder" only in the nix build, where that folder exists.
 

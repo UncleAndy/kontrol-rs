@@ -17,6 +17,10 @@ pub const DEVICE_NAME: &str = "Kontroller";
 pub const VENDOR_ID: u16 = 0x1234;
 pub const PRODUCT_ID: u16 = 0x5678;
 
+/// Where the virtual keyboard is created. Fixed by the `evdev` crate, so the
+/// `-o` option of `komplement` is accepted but has no effect in this port.
+pub const UINPUT_PATH: &str = "/dev/uinput";
+
 pub struct Keyboard {
     device: VirtualDevice,
 }
