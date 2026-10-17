@@ -232,6 +232,9 @@ pub struct Studio {
     pub solo: bool,
     pub armed: bool,
     pub position: String,
+    /// The DAW's whole twelve-digit row as text, holes and all: what its own
+    /// display shows, next to the timecode `position` holds on its own.
+    pub display: String,
     pub transport: Transport,
     pub looping: bool,
     pub click: bool,
@@ -243,6 +246,70 @@ pub struct Studio {
 
 /// Channels in one MCU bank, which is how many the bank view holds.
 pub const BANK_CHANNELS: usize = 8;
+
+/// Digits in the DAW's own display, the row of seven-segment characters it
+/// writes over controllers 64..75.
+pub const DISPLAY_DIGITS: usize = 12;
+
+/// How many of those digits are the timecode: the ten rightmost ones. The two
+/// left of them are the assignment digits, which the protocol numbers with the
+/// same row.
+pub const TIMECODE_DIGITS: usize = 10;
+
+/// The DAW's row of seven-segment digits, as it was written.
+///
+/// Two measured rules live here. The row is numbered **from the right**: the
+/// protocol's controller 64 is the rightmost digit, so a fixed index means a
+/// fixed place on the panel however the DAW updates it, one digit at a time.
+/// And the value written is the character with **bit 6 (0x40) as the dot**, so
+/// `0x30` is `0`, `0x70` is `0.` and a zero means that digit is dark - which is
+/// why a display read from the capture can have holes in it where the DAW turned
+/// a leading zero off.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Digits([u8; DISPLAY_DIGITS]);
+
+impl Digits {
+    /// Writes one digit, counting from the right as the protocol does.
+    /// Returns whether this changed anything, so a caller can redraw only then.
+    pub fn set(&mut self, index: usize, value: u8) -> bool {
+        if index >= DISPLAY_DIGITS || self.0[index] == value {
+            return false;
+        }
+        self.0[index] = value;
+        true
+    }
+
+    /// The whole row as the panel shows it, left to right.
+    pub fn text(&self) -> String {
+        self.render(0..DISPLAY_DIGITS)
+    }
+
+    /// The timecode part of it: the ten rightmost digits.
+    pub fn timecode(&self) -> String {
+        self.render(0..TIMECODE_DIGITS)
+    }
+
+    /// Renders a run of digits the way the panel reads it - rightmost digit
+    /// last - so the caller can ask for the whole row or just the timecode.
+    fn render(&self, digits: std::ops::Range<usize>) -> String {
+        let mut text = String::with_capacity(digits.len() * 2);
+        for index in digits.rev() {
+            let value = self.0[index];
+            // Bit 6 is the dot, not part of the character.
+            let character = (value & 0x3f) as char;
+            if character == '\0' || character == ' ' {
+                text.push(' ');
+            } else {
+                text.push(character);
+            }
+            if value & 0x40 != 0 {
+                text.push('.');
+            }
+        }
+        text
+    }
+}
+
 
 impl Studio {
     /// An empty state: what the screen shows before a source has said anything.
@@ -260,6 +327,7 @@ impl Studio {
             solo: false,
             armed: false,
             position: String::new(),
+            display: String::new(),
             transport: Transport::Stopped,
             looping: false,
             click: false,
@@ -284,7 +352,8 @@ impl Studio {
             mute: false,
             solo: true,
             armed: true,
-            position: "2:14.3".to_string(),
+            position: " 12 3  456".to_string(),
+            display: "01 12 3  456".to_string(),
             transport: Transport::Playing,
             looping: true,
             click: false,

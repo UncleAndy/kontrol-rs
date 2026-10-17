@@ -9,7 +9,7 @@
 use std::fs;
 
 use kontrol_rs::mcu::{Decoder, Message, NAME_FIELD};
-use kontrol_rs::studio::Transport;
+use kontrol_rs::studio::{Transport, DISPLAY_DIGITS, TIMECODE_DIGITS};
 
 /// A status line is longer than one name field; that is what tells them apart.
 const NAME_FIELD_TOO_LONG: usize = NAME_FIELD;
@@ -58,6 +58,7 @@ fn the_decoder_reads_reapers_own_stream() {
     let mut levels = 0usize;
     let mut name_writes = 0usize;
     let mut statuses = 0usize;
+    let mut digits = 0usize;
     let mut others = 0usize;
 
     let mut was_playing = false;
@@ -87,6 +88,7 @@ fn the_decoder_reads_reapers_own_stream() {
                     );
                     statuses += 1;
                 }
+                Message::Display { .. } => digits += 1,
                 Message::Other => others += 1,
             }
         }
@@ -123,7 +125,7 @@ fn the_decoder_reads_reapers_own_stream() {
     assert_eq!(levels, families[2], "aftertouch");
     assert_eq!(faders, families[3], "pitch bend");
     assert_eq!(
-        name_writes + statuses + others,
+        name_writes + statuses + others + digits,
         families[1] + families[4],
         "controllers and SysEx"
     );
@@ -166,13 +168,43 @@ fn the_decoder_reads_reapers_own_stream() {
     // Meters arrive as aftertouch, one per channel, and are kept.
     assert!(decoder.levels().iter().any(|level| *level > 0), "no meter levels");
 
+    // The DAW's own display arrived as digits, and the twelve of them make the
+    // row the panel now shows: ten of the timecode and two of the assignment
+    // digits the protocol puts left of it.
+    assert!(digits > 100, "the display digits are in the fixture: {digits}");
+    assert_eq!(
+        studio.display.chars().filter(|c| *c != '.').count(),
+        DISPLAY_DIGITS,
+        "the row is twelve digits, with a dot among them where the DAW set one: {:?}",
+        studio.display
+    );
+    assert_eq!(
+        studio.position.chars().filter(|c| *c != '.').count(),
+        TIMECODE_DIGITS,
+        "the timecode is the ten rightmost of them: {:?}",
+        studio.position
+    );
+    assert!(
+        studio.display.starts_with("01"),
+        "the assignment digits of the capture read 01: {:?}",
+        studio.display
+    );
+    // Pinned to what the fixture actually says, so a change in the decode shows
+    // up here instead of quietly moving a digit on the panel: bar 25, beat 1,
+    // tick 000, with the digits the DAW turned off left as holes.
+    assert_eq!(studio.display, "01 25 1  000");
+    assert_eq!(studio.position, " 25 1  000");
+
     println!(
-        "fixture: {} messages (led {leds}, level {levels}, fader {faders}, name {name_writes}, status {statuses}, other {others})\n\
+        "fixture: {} messages (led {leds}, level {levels}, fader {faders}, name {name_writes}, status {statuses}, digit {digits}, other {others})\n\
          names: {names:?}\n\
+         display: {:?}, timecode: {:?}\n\
          transport: {:?}, looping {}, click {}\n\
          track: {} {:?}, fader {:?}\n\
          levels: {:?}",
         messages.len(),
+        studio.display,
+        studio.position,
         studio.transport,
         studio.looping,
         studio.click,

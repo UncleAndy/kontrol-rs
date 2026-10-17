@@ -17,6 +17,7 @@ use kontrol_rs::hid::Hid;
 use kontrol_rs::hid_dump::Dump;
 use kontrol_rs::leds::Leds;
 use kontrol_rs::mapping::MappingTable;
+use kontrol_rs::studio::{Page, Size};
 use kontrol_rs::uinput::Keyboard;
 use kontrol_rs::GetOpt;
 
@@ -29,7 +30,7 @@ extern "C" fn handle_interrupt(_signal: libc::c_int) {
 
 /// The options the parser accepts, in `getopt` notation. The usage text and the
 /// parser must agree; a test below checks that they do.
-const SHORT_OPTIONS: &str = "hv:p:m:o:qnsxdhalS:";
+const SHORT_OPTIONS: &str = "hv:p:m:o:qnsxdhalS:X:";
 
 fn print_usage(argv0: &str) {
     println!("{}", usage_text(argv0));
@@ -76,7 +77,19 @@ Options:
  -S <state>           Show one named state on the display and wait, so it can be
                       looked at or photographed: on, off, top, bottom, left,
                       right, vstripes, hstripes, border, message, nav, navmed,
-                      navmid, navbig, glyphs, text60.
+                      navmid, navbig, glyphs, text60, and the four live pages
+                      page-transport, page-track, page-tracks, page-general -
+                      each of those with :small, :medium or :large after it.
+
+ -X <port>            Draw what a DAW reports over Mackie Control Universal,
+                      live. <port> names the port its control surface writes to,
+                      as an address (14:0) or a piece of its name (\"Midi Through\",
+                      quote it); -X alone with a miss prints the list to choose
+                      from. The display is taken over for the run and given back
+                      on the way out; nothing is ever sent to the DAW. With
+                      -S page-track:large the page and the glyph size are chosen
+                      (default: page-track at medium). Ctrl+C stops it. See
+                      doc/display-interface.md.
 
 Advanced options:
  -p <productId>       USB product ID (in case you want to try other hardware).
@@ -159,6 +172,7 @@ fn main() {
     let mut list_devices = false;
     let mut screen_probe = false;
     let mut screen_state: Option<String> = None;
+    let mut mcu_input: Option<String> = None;
     let mut parsed_options = 0usize;
 
     let mut options = GetOpt::new(
@@ -184,6 +198,7 @@ fn main() {
             'l' => list_devices = true,
             's' => screen_probe = true,
             'S' => screen_state = Some(value),
+            'X' => mcu_input = Some(value),
             other => {
                 eprintln!("Unknown option: -{other}");
                 print_usage(&argv0);
@@ -207,6 +222,45 @@ fn main() {
                 kontrol_rs::hid::format_device_list(&devices, vid as u16, pid as u16)
             ),
             Err(reason) => println!("Could not list HID devices: {reason}"),
+        }
+        return;
+    }
+
+    // `-X`: draw what a DAW reports over MCU, live, on the panel. Stands alone
+    // like the other display modes - no mapping file, no keystrokes - and takes
+    // the display over for the run. This is the decoder seen on hardware; the
+    // daemon (step 4 of doc/display-interface.md) is what keeps it.
+    if let Some(port) = mcu_input {
+        let (page, size) = kontrol_rs::live::page_and_size(
+            screen_state.as_deref().unwrap_or(""),
+            Page::Track,
+            Size::Medium,
+        );
+        match Hid::open(vid as u16, pid as u16) {
+            Ok(hid) => {
+                // The port is opened before the display is taken over, so that a
+                // name that matches nothing is reported without the panel
+                // flickering into our hands first.
+                let input = match kontrol_rs::mcu_port::McuInput::open(&port) {
+                    Ok(input) => input,
+                    Err(message) => {
+                        println!("{message}");
+                        exit(1);
+                    }
+                };
+                let _ = hid.write_raw(&[0xa0, 0x03, 0x04]);
+                let outcome = kontrol_rs::live::run(&hid, input, page, size, quiet);
+                let _ = hid.write_raw(&[0xa0, 0x07, 0x00]);
+                if let Err(message) = outcome {
+                    println!("{message}");
+                    exit(1);
+                }
+            }
+            Err(reason) => {
+                println!("Opening the HID device {vid:04x}:{pid:04x} failed: {reason}");
+                println!("Use -l to see which devices are there (-p 1740 for the A49).");
+                exit(1);
+            }
         }
         return;
     }

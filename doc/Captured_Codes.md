@@ -172,10 +172,21 @@ Through port, as they should.
   per channel, the same value every time. Not yet identified.
 * **Controllers 48..55** (0x30..0x37) appear 19 times each with constant values -
   V-Pot ring modes, refreshed rather than changed.
-* **Controllers 64..75** carry ASCII codes (48 = '0', 57 = '9', 0 = blank):
-  twelve characters forming a display of their own (`|000  1 52 10|` plus three
-  other states in the whole capture). Purpose not identified yet; it is not a
-  clock, because it changed four times in seventy seconds.
+* **Controllers 64..75 are the DAW's own display**, and it is a time display. The
+  protocol says twelve seven-segment digits, **numbered from the right**: controller
+  64 is the rightmost character, 65 the one left of it, and so on; the ten rightmost
+  are the timecode and the two left of them are the assignment digits, which is why
+  the capture always shows `01` before the time. Bit 6 (0x40) of the value is the
+  dot of the segment, not part of the character, and a zero means the DAW turned
+  that digit off - which is why a reading taken from the capture has holes in it
+  (`01 25 1  000`). Measured behaviour, all of it consistent with a position rather
+  than a clock face: nothing arrives while the DAW is stopped; while it played, the
+  three rightmost digits moved fastest (they are collected in bursts, the counter's
+  fine part) and one digit walked 1, 2, 3 - the beat; and the "position jump" step
+  moved the coarse field from 11 to 25, which is what a jump of the playhead does
+  and what no clock does. The old note here - "not a clock, because it changed four
+  times in seventy seconds" - was reading a display that only *refreshes* when its
+  digits change, which for a stopped DAW is never.
 * **Faders are pitch bend**, which is why they are easy to miss: one message per
   channel - midi channels 1..8 for the eight strip faders and channel 9 for the
   master - with a signed 14-bit value (`(value + 8192) / 128` is the familiar
@@ -196,19 +207,30 @@ Through port, as they should.
 `tests/mcu_capture.rs` feeds it a slice of the capture itself
 (`tests/fixtures/mcu-reaper.txt`, cut out of the log with `tools/mcu-slice.awk`),
 so the measurements above are what the tests assert rather than a comment about
-them. Two questions were settled on the way:
+them. Three questions were settled on the way:
 
-* **The bank is eight channels, and the next bank starts eight tracks later.** The
-  bank-change step writes new names - `8 Synt`, `9 Othe`, `Vocal` - into the cells
-  that held `0 Lead`, `1 Back`, `2 Drum`, and clears the rest, which is what a bank
-  with three tracks left looks like. The names carry their own index, so the first
-  bank is tracks one to eight and the second starts at nine.
-* **The LCD cells do not line up with the strip LEDs**, and that is still to be
-  settled. The names arrived at offsets 7, 14 ... 49, while offset 0 carried
-  Reaper's own announcement (112 bytes, 18 times) and once a name, `7 Stri`. The
-  strip LEDs, on the other hand, number the first channel zero: selecting the
-  first three tracks lit notes 24, 25 and 26. So the name of the channel an LED
-  points at is not in the cell its index suggests. Either the surface's first cell
-  belongs to the announcement and the names start one cell later, or the project's
-  first track has no name that Reaper writes. Selecting the tracks of one bank one
-  after another would settle it in half a minute.
+* **The bank is eight channels.** The bank-change step writes new names - `8 Synt`,
+  `9 Othe`, `Vocal` - into the cells that held `0 Lead`, `1 Back`, `2 Drum`, and
+  clears the rest, which is what a bank with three tracks left looks like. Nothing
+  in MCU says which project tracks the bank covers: the digits in those names are
+  the owner's own text, not positions. `7 Strings` is a track whose name happens to
+  begin with a digit - and the track it names is not the seventh of the project
+  either, as the owner put it. So the eight is the *step* the surface takes when a
+  bank changes, and a page may print the bank's own numbering, not a track number.
+* **The LCD cells line up with the strip LEDs.** The names arrived at offsets
+  7, 14 ... 49 - field *k* at offset 7*k* - and offset 0 carried Reaper's own
+  announcement (112 bytes, 18 times) and once a name, `7 Stri`, which the owner
+  identified as the start of the track name `7 Strings`. So the first cell is not
+  special: Reaper writes the first strip's name into it, and its announcement takes
+  the same place when it needs the row. The strip LEDs number the first channel
+  zero - selecting the first three tracks lit notes 24, 25 and 26 - which is the
+  same first channel. No off-by-one: the bank simply began at a track whose name
+  reads like a number.
+* **The display is the position**, and it needed the protocol to be read at all:
+  twelve digits numbered from the right, the ten rightmost the timecode, the dot in
+  bit 6 and a zero meaning "this digit is dark". What made it look unreadable in the
+  capture was the reading, not the data - a change trace of a row the DAW updates one
+  digit at a time looks like a random number, and the row is *refreshed* only when a
+  digit changes, so a stopped DAW leaves it alone entirely. `Studio::position` holds
+  the timecode and `Studio::display` the whole row, and both are asserted against the
+  fixture.

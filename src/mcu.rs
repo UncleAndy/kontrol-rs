@@ -6,7 +6,7 @@
 //! places where a number is still a guess say so. Nothing here ever sends a
 //! byte back, so listening cannot disturb the DAW.
 
-use crate::studio::{BANK_CHANNELS, Studio, Transport};
+use crate::studio::{Digits, BANK_CHANNELS, DISPLAY_DIGITS, Studio, Transport};
 
 /// The channel strip LEDs, one block of eight notes per row. Measured:
 /// selecting the first three tracks lit notes 24, 25 and 26 in turn, and
@@ -55,9 +55,13 @@ pub enum Message {
     /// An LCD write that is not a name field: Reaper writes its own status
     /// line, a whole 55 characters wide, through the same command.
     Status { text: String },
+    /// One digit of the DAW's own display, over controllers 64..75. The digit
+    /// number counts from the right: zero is controller 64, the rightmost
+    /// character. The value is the character with bit 6 as the dot, and zero
+    /// means that digit is dark.
+    Display { digit: u8, value: u8 },
     /// Something the screen has no use for yet: the V-Pot ring modes on
-    /// 0x30..0x37, the 0x20 command, the twelve-character display on 0x40..,
-    /// and the notes that only blink.
+    /// 0x30..0x37, the 0x20 command, and the notes that only blink.
     Other,
 }
 
@@ -159,8 +163,13 @@ fn decode(status: u8, data: [u8; 2]) -> Message {
             channel,
             value: ((data[1] as i16) << 7 | data[0] as i16) - 8192,
         },
-        // Controllers include the V-Pot ring modes and the twelve-character
-        // display, neither of which is understood yet.
+        // The twelve-digit display comes over the controllers numbered from 64,
+        // which is the rightmost digit. Nothing else lives in the controllers
+        // this decoder reads, so the rest is still unread.
+        0xb0 if (64..64 + DISPLAY_DIGITS as u8).contains(&data[0]) => Message::Display {
+            digit: data[0] - 64,
+            value: data[1],
+        },
         _ => Message::Other,
     }
 }
@@ -213,6 +222,9 @@ pub struct Decoder {
     levels: [u8; BANK_CHANNELS],
     /// Which strip the DAW has selected, once it has said.
     selected: Option<usize>,
+    /// The DAW's own display row, kept as digits so one update cannot disturb
+    /// the rest of it.
+    digits: Digits,
 }
 
 impl Decoder {
@@ -223,6 +235,7 @@ impl Decoder {
             arms: [false; BANK_CHANNELS],
             levels: [0; BANK_CHANNELS],
             selected: None,
+            digits: Digits::default(),
         }
     }
 
@@ -263,6 +276,14 @@ impl Decoder {
                 let index = *channel as usize;
                 if index < BANK_CHANNELS {
                     self.levels[index] = *value;
+                }
+            }
+            // The display is written one digit at a time, and the two texts the
+            // pages read are derived from the row, so they travel together.
+            Message::Display { digit, value } => {
+                if self.digits.set(*digit as usize, *value) {
+                    self.studio.display = self.digits.text();
+                    self.studio.position = self.digits.timecode();
                 }
             }
             Message::Name { offset, text } => {
@@ -455,7 +476,7 @@ mod tests {
         // One status byte, two controllers: running status.
         let messages = feed(&mut decoder, &[0xb0, 64, 48, 65, 49]);
         assert_eq!(messages.len(), 2);
-        assert_eq!(messages[0], Message::Other);
+        assert_eq!(messages[0], Message::Display { digit: 0, value: 48 });
 
         // An LCD write fed byte by byte, the way the daemon will see it.
         let sysex = lcd(7, b"0 Lead ");
@@ -474,10 +495,40 @@ mod tests {
     fn anything_the_screen_does_not_read_changes_nothing() {
         let mut decoder = Decoder::new();
         let before = decoder.studio().clone();
-        // A blinking LED, the twelve-character display, a ring mode.
+        // A blinking LED and a V-Pot ring mode: neither is read yet, and both
+        // must leave the state alone.
         feed(&mut decoder, &[0x90, 76, 127]);
-        feed(&mut decoder, &[0xb0, 64, 49]);
         feed(&mut decoder, &[0xb0, 48, 3]);
         assert_eq!(decoder.studio(), &before);
+    }
+
+    #[test]
+    fn the_displays_digits_land_from_the_right_and_only_where_they_are_written() {
+        let mut decoder = Decoder::new();
+        // The capture's own group write: the two assignment digits first, then
+        // the ten of the timecode, with zeros where a digit is dark.
+        feed(&mut decoder, &[0xb0, 75, 48, 74, 49]);
+        feed(
+            &mut decoder,
+            &[
+                0xb0, 64, 48, 65, 48, 66, 48, 67, 0, 68, 0, 69, 49, 70, 0, 71, 49, 72, 49, 73, 0,
+            ],
+        );
+
+        // Read as the panel reads it: left to right, rightmost digit last.
+        assert_eq!(decoder.studio().position, " 11 1  000");
+        assert_eq!(decoder.studio().display, "01 11 1  000");
+
+        // A jump of the playhead moves only the field it belongs to.
+        feed(&mut decoder, &[0xb0, 71, 53, 72, 50]);
+        assert_eq!(decoder.studio().position, " 25 1  000");
+    }
+
+    #[test]
+    fn a_dot_rides_in_bit_six_of_a_digit() {
+        let mut decoder = Decoder::new();
+        feed(&mut decoder, &[0xb0, 64, 0x30, 65, 0x70]);
+        // Digit one is `0` with the dot, digit zero is plain `0`.
+        assert_eq!(decoder.studio().position, "        0.0");
     }
 }

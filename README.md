@@ -44,8 +44,10 @@ The port also has modules the C tool has no counterpart for, all of them for the
 display: `src/screen.rs` (frames, reports and the drawing primitives), `src/font.rs` (the 5x7
 font), `src/font_medium.rs` (the 7x9 font), `src/studio.rs` (the state the screen shows and the
 pages it has), `src/pages.rs` (those pages), `src/mcu.rs` (the decoder that fills that state from a
-DAW's *Mackie Control Universal* output) and `src/nav.rs` (the earlier drafts of the same
-screens, kept as `-S nav` states until the pages have been judged on hardware). `doc/display-interface.md`
+DAW's *Mackie Control Universal* output), `src/mcu_port.rs` (the ALSA sequencer port that decoder
+reads from) and `src/nav.rs` (the earlier drafts of the same
+screens, kept as `-S nav` states until the pages have been judged on hardware). `src/live.rs` puts the
+two together - listen, decode, draw - as `komplement -X <port>`, and `doc/display-interface.md`
 works out how a DAW is meant to feed them.
 
 ## Building
@@ -120,6 +122,24 @@ many of them fit; the general page is the exception, drawn as a mixer of eight c
 and solo marks, a fader filled from the bottom) and ignoring the size. How a DAW is meant to feed all
 this - MCU for states, a FIFO for messages - is worked out in `doc/display-interface.md`.
 
+The decoder can be seen on the panel before any daemon exists: `komplement -X <port>` listens to the
+port a DAW's control surface writes to and draws one page of the state it reports, live. `<port>` is
+an address (`14:0`) or a piece of the port's name (`"Midi Through"`, quoted) as `aconnect -l` shows it,
+with the list printed when nothing matches. `-S page-track:large` picks the page and the glyph size
+(default: the track page at medium). It takes the display over for the run and gives it back on the way
+out, including on Ctrl+C; a frame the panel already shows is never sent twice, and nothing is ever sent
+back to the DAW. The whole queue is drained into the state before anything is drawn, and the panel is
+written at most twenty times a second: a DAW sends in bursts (nine pitch bends at once, hundreds of
+aftertouch events a second while playing) and drawing per message runs the sequencer's queue over -
+`ENOSPC`, which is where the first hardware run ended. Paging by the two buttons, messages and the
+daemon itself are still to come.
+
+The position on that screen is the DAW's *own* display, decoded from its twelve seven-segment digits
+(controllers 64..75, numbered from the right, dot in bit 6): `Studio::position` is the ten-digit
+timecode and `Studio::display` the whole row, holes included. So the track page leads with position and
+transport, which is what has to survive the small size; the mute, solo and arm marks ride on the name
+line instead of taking a line of their own.
+
 The medium font (`src/font_medium.rs`, 7x9, sixteen characters per line) is authored as art in
 `tools/font-medium-glyphs.txt` and generated into Rust by `tools/font-medium-table.awk`, which also
 prints a sheet of the whole font as the panel will show it.
@@ -143,6 +163,11 @@ it happened in. `tools/mcu-slice.awk` cuts a few interesting seconds out of it a
 is what `tests/fixtures/mcu-reaper.txt` holds and what `tests/mcu_capture.rs` feeds to `src/mcu.rs`, so
 the decoder is checked against the DAW's own stream. Every opcode in the decoder was measured this way -
 none of them came from documentation.
+
+The listening path itself is checked too, where it can be: `tests/mcu_port_roundtrip.rs` starts a
+writer port and the listening port in one process and asserts that a mute LED, a fader and a name
+field arrive at the decoder through ALSA unchanged. It needs `/dev/snd/seq`, so it does its work on a
+machine with a sequencer and says so instead of failing on one without.
 
 The keyboard needs read/write permission for the user running `komplement`, and `/dev/uinput`
 needs write permission for sending keystrokes. There is a NixOS module for that (below); the C

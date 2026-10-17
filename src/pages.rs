@@ -72,13 +72,16 @@ pub fn lines(page: Page, studio: &Studio) -> Vec<Line> {
             Line::text(studio.transport_flags()),
         ],
         Page::Track => vec![
+            // The position and the transport come first, because the size
+            // decides how many lines fit and these two are what has to be
+            // readable while the DAW plays, even at the smallest size.
+            Line::two_sided(&studio.position, studio.transport.word()),
             Line::two_sided(
                 format!("{} {}", studio.track_number, studio.track_name),
-                String::new(),
+                studio.flags(),
             ),
             Line::with_bar("VOL", studio.volume_fraction, &studio.volume),
             Line::with_bar("PAN", studio.pan_fraction, &studio.pan),
-            Line::text(studio.flags()),
         ],
         Page::Tracks => studio
             .bank
@@ -352,9 +355,17 @@ mod tests {
         let loud_frame = render(Page::Track, &loud, Size::Small);
         assert_ne!(quiet_frame, loud_frame);
 
-        // Page 1 carries the volume line at the small size, bar included.
+        // The bar lives in the row band of the line that carries it, and which
+        // line that is is the page's business, not this test's: asking the page
+        // keeps the test true when the lines are reordered.
+        let volume_line = lines(Page::Track, &Studio::sample())
+            .iter()
+            .position(|line| line.left.starts_with("VOL"))
+            .expect("the track page carries the volume line");
+        let row_band = Size::Small.line_rows()[volume_line] / 8;
         assert!(
-            lit_pixels(&loud_frame, 1, 2) > lit_pixels(&quiet_frame, 1, 2),
+            lit_pixels(&loud_frame, row_band, row_band + 1)
+                > lit_pixels(&quiet_frame, row_band, row_band + 1),
             "the bar did not grow with the value"
         );
     }
@@ -397,8 +408,12 @@ mod tests {
             ..Studio::sample()
         };
         let with_bar = render(Page::Track, &studio, Size::Medium);
-        let without = lines(Page::Track, &studio);
-        assert!(without[1].bar.is_some(), "the sample line has a bar");
+        let page_lines = lines(Page::Track, &studio);
+        let volume_line = page_lines
+            .iter()
+            .find(|line| line.left.starts_with("VOL"))
+            .expect("the track page carries the volume line");
+        assert!(volume_line.bar.is_some(), "the sample line has a bar");
         assert!(with_bar.iter().any(|byte| *byte != 0x00));
     }
 
