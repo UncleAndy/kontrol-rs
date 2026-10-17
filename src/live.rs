@@ -18,8 +18,7 @@ use crate::engine;
 use crate::hid::Hid;
 use crate::mcu::Decoder;
 use crate::mcu_port::McuInput;
-use crate::pages;
-use crate::screen::{self, Frame};
+use crate::panel::{Job, Panel};
 use crate::studio::{Page, Size};
 use crate::timecode::TimeLayout;
 
@@ -52,65 +51,6 @@ pub fn watch_for_interrupts() {
         action.sa_flags = 0;
         libc::sigaction(libc::SIGINT, &action, std::ptr::null_mut());
         libc::sigaction(libc::SIGTERM, &action, std::ptr::null_mut());
-    }
-}
-
-/// The panel together with the picture it was last given.
-///
-/// A frame the panel already shows does not need sending again - the rule the
-/// daemon will follow too, so the two can be compared.
-#[derive(Default)]
-pub struct Screen {
-    last: Option<Frame>,
-}
-
-impl Screen {
-    pub fn new() -> Screen {
-        Screen { last: None }
-    }
-
-    /// The two reports that put `frame` on the panel, or `None` when that is the
-    /// picture it is already showing.
-    pub fn reports(&mut self, frame: &Frame) -> Option<[Vec<u8>; 2]> {
-        if self.last.as_ref() == Some(frame) {
-            return None;
-        }
-        self.last = Some(*frame);
-        Some(screen::frame_reports(frame))
-    }
-
-    /// Forget what the panel is showing, so the next frame is written in full.
-    /// Only one thing needs this: a panel that was unplugged and plugged back in
-    /// shows nothing knowable, and a frame it already had means one that is never
-    /// sent - the panel would stay dark while the state moved on.
-    pub fn forget(&mut self) {
-        self.last = None;
-    }
-}
-
-/// The panel's rate limit: at most twenty frames a second, as
-/// `doc/display-interface.md` sets out, and a waiting room the caller sleeps in.
-///
-/// Waiting happens *after* the DAW's queue has been drained into the state, which
-/// is the whole point: a fader that moves fast then costs one frame, not twenty,
-/// and the queue cannot run over while the keyboard is being written to.
-#[derive(Default)]
-pub struct Pace {
-    last: Option<Instant>,
-}
-
-impl Pace {
-    /// The shortest gap between two frames on the panel.
-    pub const MIN_GAP: Duration = Duration::from_millis(50);
-
-    /// How long to wait before drawing, and a note that the frame went out.
-    pub fn rest(&mut self, now: Instant) -> Duration {
-        let rest = self
-            .last
-            .map(|last| Pace::MIN_GAP.saturating_sub(now.saturating_duration_since(last)))
-            .unwrap_or(Duration::ZERO);
-        self.last = Some(now + rest);
-        rest
     }
 }
 
@@ -238,8 +178,13 @@ pub fn run(
     watch_for_interrupts();
 
     let mut decoder = Decoder::with_layout(layout);
-    let mut screen = Screen::new();
-    let mut pace = Pace::default();
+    // The panel, on its own thread: it cannot take the reading of the keyboard or
+    // the DAW down with it, and it is started again if it ends.
+    let mut panel = Panel::start();
+    // Whether the next picture has to be written in full, whatever the panel
+    // remembers: true after the panel was unplugged, and after its thread was
+    // started again.
+    let mut redraw = false;
     let mut paging = Paging::new(page, size);
     let mut messages = 0usize;
     let mut overflowed = 0usize;
@@ -362,7 +307,7 @@ pub fn run(
                             // The panel's own memory went with the device, so it is
                             // taken over again and the frame is written in full.
                             let _ = device.write_raw(&[0xa0, 0x03, 0x04]);
-                            screen.forget();
+                            redraw = true;
                             keyboard = Some(device);
                             reported_absent = false;
                             if !quiet {
@@ -408,25 +353,45 @@ pub fn run(
             }
         }
 
-        let frame = if waiting {
-            crate::screen::waiting_frame()
-        } else {
-            pages::render(paging.page, decoder.studio(), paging.size)
-        };
+        // The picture goes to the panel's thread and is never waited for: drawing
+        // happens over there, which is what keeps a screen that fails from taking
+        // the keyboard with it. *Keys first, panel second* is a rule of the whole
+        // service, not a hope.
+        panel.draw(Job {
+            page: paging.page,
+            size: paging.size,
+            studio: decoder.studio().clone(),
+            waiting,
+            redraw: std::mem::take(&mut redraw),
+        });
+
+        // Whatever the panel finished, oldest frame first. Writing needs the
+        // device, so it happens here, where the keyboard is.
         if let Some(device) = keyboard.as_ref() {
-            if let Some(reports) = screen.reports(&frame) {
-                // Both queues are empty at this point, so waiting a few
-                // milliseconds costs nothing but frames.
-                let rest = pace.rest(Instant::now());
-                if !rest.is_zero() {
-                    std::thread::sleep(rest);
-                }
+            while let Some(reports) = panel.reports() {
                 for report in reports {
                     let _ = device.write_raw(&report);
                 }
             }
         }
+
+        // A panel thread that ended is a panel thread that panicked, which is the
+        // one way it can end while this loop runs: say so, start it again, and
+        // send the next picture in full, because a fresh thread remembers nothing
+        // about what the panel is showing.
+        if panel.is_finished() {
+            let restarts = panel.restart();
+            redraw = true;
+            if !quiet {
+                println!(
+                    "The panel's thread ended and was started again (restart {restarts}); the keystrokes were never touched."
+                );
+            }
+        }
     }
+
+    // The panel first, so nothing is drawing while the display is handed back.
+    panel.stop();
 
     // The run is over, for whatever reason: give the display back to the
     // keyboard's own logic first, on whichever handle is current - the one
@@ -471,72 +436,6 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_panel_that_was_unplugged_is_written_to_in_full_again() {
-        let mut screen = Screen::new();
-        let frame = screen::on();
-        assert!(screen.reports(&frame).is_some());
-
-        // What a panel shows after being unplugged and plugged back in is not
-        // knowable, so the same picture has to go out again: a panel reached for
-        // the first time is exactly what forgetting describes.
-        screen.forget();
-        assert!(
-            screen.reports(&frame).is_some(),
-            "a panel that was away needs the frame again"
-        );
-        assert!(screen.reports(&frame).is_none(), "and only once");
-    }
-
-    #[test]
-    fn a_frame_is_sent_once_and_only_again_when_it_changes() {
-        let mut screen = Screen::new();
-        let first = screen::on();
-
-        let reports = screen.reports(&first).expect("the first frame is always sent");
-        assert_eq!(reports.len(), 2, "a frame goes out as two reports");
-
-        assert!(
-            screen.reports(&first).is_none(),
-            "an unchanged picture must not be sent again"
-        );
-
-        let mut second = first;
-        second[0] ^= 0x01;
-        assert!(screen.reports(&second).is_some(), "a changed picture must be sent");
-
-        // And going back to a picture already shown is a change again, because
-        // only the *last* frame is remembered.
-        assert!(screen.reports(&first).is_some());
-    }
-
-    #[test]
-    fn frames_never_go_out_faster_than_twenty_a_second() {
-        let t0 = Instant::now();
-        let mut pace = Pace::default();
-
-        assert_eq!(
-            pace.rest(t0),
-            Duration::ZERO,
-            "the first frame goes out at once"
-        );
-        assert_eq!(
-            pace.rest(t0 + Duration::from_millis(10)),
-            Duration::from_millis(40),
-            "ten milliseconds after a frame, the next one waits the rest of the gap"
-        );
-        assert_eq!(
-            pace.rest(t0 + Duration::from_millis(60)),
-            Duration::from_millis(40),
-            "the last frame went out at t0 + 50, so this one waits until t0 + 100"
-        );
-        assert_eq!(
-            pace.rest(t0 + Duration::from_millis(1000)),
-            Duration::ZERO,
-            "after an idle second there is nothing to wait for"
-        );
-    }
 
     #[test]
     fn the_page_and_size_of_a_name_are_read_the_way_the_states_write_them() {
@@ -651,8 +550,8 @@ mod tests {
         let studio = crate::studio::Studio::empty();
         for page in Page::ALL {
             for size in [Size::Small, Size::Medium, Size::Large] {
-                let frame = pages::render(page, &studio, size);
-                assert_eq!(frame.len(), screen::FRAME_BYTES);
+                let frame = crate::pages::render(page, &studio, size);
+                assert_eq!(frame.len(), crate::screen::FRAME_BYTES);
             }
         }
     }

@@ -259,6 +259,15 @@ with the real keyboard gone no release will ever arrive, and a key left down in 
 outlives the unplug. Ctrl+C ends either mode as before, giving the display back to the keyboard's own
 logic on whichever handle is current by then.
 
+**The panel has a thread of its own, and is started again if it fails.** The live view hands the
+picture to a rendering thread and never waits for it: a panel that is busy - or gone - cannot hold up
+the reading of the keyboard or of the DAW, which is the rule the whole service follows (*keys first,
+panel second*). Only the newest picture is worth drawing, so jobs replace each other rather than
+queue. The thread remembers what the panel is showing; when it ends - which while the loop runs means
+it panicked - the loop says so, starts it again, and sends the next frame in full, because a fresh
+thread knows nothing. The twenty-frames-a-second limit lives on that thread too, so a fast fader no
+longer costs the reading side anything.
+
 This is the *finding* half of the service that is planned; the service itself - one program with
 keystrokes and panel, the panel in a task of its own that is restarted when it fails - is the
 next step, and `doc/display-interface.md` keeps that plan.
