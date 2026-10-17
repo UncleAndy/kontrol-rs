@@ -118,3 +118,101 @@ fn what_a_writer_port_sends_reaches_the_decoder() {
     );
     assert_eq!(state.bank[1].name, "0 Lead", "the name field at offset seven");
 }
+
+/// A DAW that restarts is a *new* client with a new number, and the subscription
+/// to the old one dies with it - silently. What has to hold is that the listening
+/// side can find its port again by name and hear the new client.
+///
+/// Like the test above, this needs a sequencer and no hardware, and does nothing
+/// on a machine without `/dev/snd/seq`.
+#[test]
+fn a_writer_that_comes_back_under_the_same_name_is_listened_to_again() {
+    if !sequencer_available() {
+        println!(
+            "No /dev/snd/seq on this machine, so there is no sequencer to test against.\n\
+             This test needs ALSA and does nothing without it - run `cargo test` where the\n\
+             keyboard and the live view live, and it checks that a restarted DAW is followed."
+        );
+        return;
+    }
+
+    const NAME: &str = "kontrol-rs follow writer";
+
+    /// One writer client with one port of the given name, the way a DAW's
+    /// control surface looks from here.
+    fn writer_of(name: &str) -> (Seq, i32) {
+        let writer = Seq::open(None, None, false).expect("a sequencer to write from");
+        writer
+            .set_client_name(&CString::new("kontrol-rs follow test").expect("a name"))
+            .expect("naming the client");
+        let port = writer
+            .create_simple_port(
+                &CString::new(name).expect("a name"),
+                PortCap::READ | PortCap::SUBS_READ,
+                PortType::APPLICATION,
+            )
+            .expect("creating the writer port");
+        (writer, port)
+    }
+
+    let (first, _first_port) = writer_of(NAME);
+    let mut input = McuInput::open(NAME).expect("subscribing to the writer port");
+    let first_client = input.source().client;
+
+    // The DAW quits: its client goes away, taking the subscription with it.
+    drop(first);
+
+    // ALSA removes the client asynchronously, so give it a moment rather than
+    // asserting on the instant. Waiting for a *state*, not for a fixed time.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while input.still_there().expect("listing the ports") {
+        if std::time::Instant::now() > deadline {
+            panic!("the writer port was still listed five seconds after its client closed");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    // The DAW is started again: same name, and - the point of the test - it may
+    // well get a different client number, which is why the name is what is
+    // searched for.
+    let (second, second_port) = writer_of(NAME);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let found = loop {
+        match input.refind() {
+            Ok(found) => break found,
+            Err(message) => {
+                if std::time::Instant::now() > deadline {
+                    panic!("the writer never came back to the port list: {message}");
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+    };
+
+    assert_eq!(found.port_name, NAME);
+    assert_eq!(
+        found.client,
+        second.client_id().expect("the new writer's client number"),
+        "the port that was found has to belong to the client that came back, not to the one \
+         that quit (it was {first_client})"
+    );
+
+    // …and the events of the new writer actually arrive, which is what the
+    // re-subscription is for: finding the port is not hearing it.
+    let mut decoder = Decoder::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let mut delivered = 0;
+    while delivered < 1 {
+        if std::time::Instant::now() > deadline {
+            panic!("the new writer's message never reached the decoder");
+        }
+        delivered += input
+            .read_into(&mut decoder)
+            .expect("reading from the port")
+            .messages;
+        send(&second, second_port, &[0x90, 17, 127]);
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    assert!(decoder.studio().bank[1].mute, "the mute LED of the second strip");
+}

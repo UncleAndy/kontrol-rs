@@ -56,7 +56,7 @@ pub type Frame = [u8; FRAME_BYTES];
 /// The states `-S` knows, in the order the help lists them. The four `page-`
 /// states are the real pages and take a size after a colon; the four `nav`
 /// states are the earlier drafts of the same screens.
-pub const STATE_NAMES: [&str; 20] = [
+pub const STATE_NAMES: [&str; 21] = [
     "on",
     "off",
     "top",
@@ -67,6 +67,7 @@ pub const STATE_NAMES: [&str; 20] = [
     "hstripes",
     "border",
     "message",
+    "waiting",
     "nav",
     "navmed",
     "navmid",
@@ -361,6 +362,19 @@ pub fn glyph_sheet() -> Frame {
     frame
 }
 
+/// What the panel shows while there is no DAW to listen to: two words in the
+/// medium font, readable from across the desk. ASCII, because that is all the
+/// fonts carry - the docs call this state «Ждём DAW».
+pub fn waiting_frame() -> Frame {
+    let mut frame = off();
+    for (row, text) in [(7usize, "WAITING"), (18, "FOR DAW")] {
+        let width = crate::font_medium::text_width(text.chars().count());
+        let x = WIDTH.saturating_sub(width) / 2;
+        draw_text_medium(&mut frame, x, row, text);
+    }
+    frame
+}
+
 /// Two lines of text on a dark screen: the state that shows whether our own
 /// rendering arrives at all.
 pub fn message_frame() -> Frame {
@@ -402,6 +416,7 @@ pub fn named_frame(name: &str) -> Option<Frame> {
         "hstripes" => Some(horizontal_stripes()),
         "border" => Some(border()),
         "message" => Some(message_frame()),
+        "waiting" => Some(waiting_frame()),
         "nav" => Some(crate::nav::render(&crate::nav::NavState::sample())),
         "navmed" => Some(crate::nav::render_medium(&crate::nav::NavState::sample())),
         "navmid" => Some(crate::nav::render_mid(&crate::nav::NavState::sample())),
@@ -420,7 +435,7 @@ pub fn state_help() -> String {
         drawn from a sample state; each takes a size after a colon, page-track:large,\n\
         one of small, medium or large (medium by default). glyphs shows the whole 7x9\n\
         font, text60 clears the screen and sends the text reports guessed at in\n\
-        doc/mini-screen.txt - measured: it does nothing.",
+        doc/mini-screen.txt - measured: it does nothing. waiting is what the panel says when the DAW's port is gone (WAITING / FOR DAW on the panel).",
         STATE_NAMES.join(", ")
     )
 }
@@ -672,6 +687,53 @@ pub fn run_probe(hid: &Hid) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_waiting_screen_says_so_in_two_words_and_nothing_else() {
+        let frame = waiting_frame();
+        assert_ne!(frame, off(), "a dark screen says nothing");
+
+        // Two words, one above the other, and nothing else on the panel: a lit
+        // pixel is a lit pixel, so the words are not asserted letter by letter -
+        // what matters is that a person sees a message where a page of DAW state
+        // would otherwise be, and that the rows around it stay dark.
+        let lit_rows = |first: usize, last: usize| {
+            let mut count = 0;
+            for row in first..last {
+                let band = row / 8;
+                let bit = 1u8 << (row % 8);
+                for column in 0..WIDTH {
+                    if frame[band * PAGE_BYTES + column] & bit != 0 {
+                        count += 1;
+                    }
+                }
+            }
+            count
+        };
+
+        let height = crate::font_medium::GLYPH_HEIGHT;
+        assert!(lit_rows(7, 7 + height) > 20, "the first word has to be lit");
+        assert!(lit_rows(18, 18 + height) > 20, "the second word has to be lit");
+        assert_eq!(lit_rows(0, 7), 0, "nothing above the first word");
+        assert_eq!(lit_rows(7 + height, 18), 0, "the gap between the words stays dark");
+        assert_eq!(lit_rows(18 + height, PAGES * 8), 0, "nothing below the second word");
+
+        // Centred, so it reads the same from either side of the desk.
+        let first_lit = (0..WIDTH)
+            .find(|column| {
+                (0..18 + height)
+                    .any(|row| frame[(row / 8) * PAGE_BYTES + column] & (1 << (row % 8)) != 0)
+            })
+            .expect("something is lit");
+        assert!(
+            first_lit > 8 && first_lit < WIDTH / 3,
+            "the words are centred, not flush left: the first lit column is {first_lit}"
+        );
+
+        // …and it is not the same picture as the probe's message screen, which
+        // is the point of having a state of its own.
+        assert_ne!(frame, message_frame());
+    }
 
     #[test]
     fn a_report_carries_the_header_the_pages_and_the_last_page_of_each_half() {

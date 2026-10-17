@@ -109,9 +109,12 @@ fully lit, and replugging the keyboard is what clears that.
 
 `komplement -S <state> -p 1740` shows one named state and waits (Enter, or 10 s without a terminal),
 so a state can be looked at or photographed: `on, off, top, bottom, left, right, vstripes, hstripes,
-border, message, nav, navmed, navmid, navbig, page-transport, page-track, page-tracks, page-general,
-glyphs, text60`. `message` draws four lines with the built-in 5x7 font (`src/font.rs`, 21 characters
-per line, lines at pixel rows 0, 8, 16 and 24) and is the end-to-end check of the renderer; `nav`,
+border, message, waiting, nav, navmed, navmid, navbig, page-transport, page-track, page-tracks,
+page-general, glyphs, text60`. `message` draws four lines with the built-in 5x7 font
+(`src/font.rs`, 21 characters
+per line, lines at pixel rows 0, 8, 16 and 24) and is the end-to-end check of the renderer;
+`waiting` is what the panel shows when the DAW's port is gone (`WAITING` / `FOR DAW`, medium font);
+`nav`,
 `navmed`, `navmid` and `navbig` draw the earlier drafts of the navigation screen for a sample track
 (laid out in `src/nav.rs`); `glyphs` shows the whole medium font on the panel; `text60` is the text
 protocol guessed at in `doc/mini-screen.txt` - it was measured on hardware and does nothing, so the
@@ -236,9 +239,12 @@ The keyboard and the DAW's port are both *found*, not passed in:
   a model this list does not know yet (`pid = ...`).
 - **the DAW's port** (`-X`) - the argument first (an address like `14:0`, or a piece of a name);
   if that finds nothing, or with `-X auto`, the *only* port that can be the surface is taken:
-  never our own port, never ALSA's own clients, never the keyboard's own MIDI port. If several
-  could be it, the settings file decides (`mcu = ...`), and failing that the ports are listed
-  together with the line that pins the answer.
+  never our own port, never ALSA's own clients, never the keyboard's own MIDI port, and - measured
+  from ALSA rather than guessed - only ports something could actually write into, so a capture
+  tool's port or another program's input is never offered. If several could be it, the settings file
+  decides (`mcu = ...`), and failing that the ports are listed, each with what ALSA says it is
+  (`(readable, subscribable, hardware)`), together with the line that pins the answer. On a machine
+  where a USB interface also offers MIDI inputs this last case is the normal one: pin it once.
 
 This is the *finding* half of the service that is planned; the service itself - one program with
 keystrokes and panel, the panel in a task of its own that is restarted when it fails - is the

@@ -13,13 +13,23 @@ use std::ffi::CString;
 
 use crate::mcu::Decoder;
 
+// Re-exported, because `Port` has them as public fields: whoever reads a port
+// list has to be able to look at what ALSA said about a port.
+pub use alsa::seq::{PortCap, PortType};
+
 use alsa::seq::{
-    Addr, ClientIter, Event, EventType, EvCtrl, EvNote, PortCap, PortIter, PortSubscribe, PortType,
-    Seq,
+    Addr, ClientIter, Event, EventType, EvCtrl, EvNote, PortIter, PortSubscribe, Seq,
 };
 
 /// The name our own client carries, so the user can see who is listening.
 pub const CLIENT_NAME: &str = "KOMPLEMENTARY MCU IN";
+
+/// ALSA's own announce port: `System:Announce`, client 0 port 1. Subscribing to
+/// it is the only way to be *told* that a port or a client appeared or went
+/// away - and a subscription to a client that died is dead and silent, so
+/// without this a restarted DAW would never be noticed.
+pub const ANNOUNCE_CLIENT: i32 = 0;
+pub const ANNOUNCE_PORT: i32 = 1;
 
 /// How much room this client asks the sequencer for, in the units ALSA uses for
 /// a pool (its own figures are small, and its defaults are sized for a trickle).
@@ -34,6 +44,10 @@ pub struct Read {
     /// Whether the sequencer reported a full queue, which means some values
     /// never arrived: the DAW sent faster than this process took it.
     pub overflowed: bool,
+    /// How many port/client announcements came with this read. They are not
+    /// MIDI (see [`is_announcement`]) and mean the world changed underneath:
+    /// a DAW that restarted, or a port that went away.
+    pub announcements: usize,
 }
 
 /// One port ALSA knows about, flattened into what a person has to choose from.
@@ -45,6 +59,15 @@ pub struct Port {
     pub client_name: String,
     /// The port's own name, e.g. `Midi Through Port-0`.
     pub port_name: String,
+    /// What ALSA says this port can do, measured rather than assumed: whether it
+    /// can be read, written to, or subscribed to as a source or a destination.
+    pub capability: PortCap,
+    /// What ALSA says this port *is*: hardware, software, application, a
+    /// synthesizer, a plain port. A control surface's port is the DAW's own
+    /// application port - but a DAW may also write into a hardware port (a
+    /// `Midi Through` loopback, measured on the owner's machine), so this is for
+    /// the listing to show, not a reason to drop a candidate by itself.
+    pub kind: PortType,
 }
 
 impl Port {
@@ -56,6 +79,45 @@ impl Port {
     /// `14:0  Midi Through / Midi Through Port-0`.
     pub fn describe(&self) -> String {
         format!("{}  {} / {}", self.address(), self.client_name, self.port_name)
+    }
+
+    /// The same, with what ALSA says the port is, for a list a person has to
+    /// choose from: `(readable, hardware)`.
+    pub fn describe_kind(&self) -> String {
+        let mut parts = Vec::new();
+        if self.capability.contains(PortCap::READ) {
+            parts.push("readable");
+        }
+        if self.capability.contains(PortCap::WRITE) {
+            parts.push("writable");
+        }
+        if self.capability.contains(PortCap::SUBS_READ) {
+            parts.push("subscribable");
+        }
+        if self.kind.contains(PortType::HARDWARE) {
+            parts.push("hardware");
+        }
+        if self.kind.contains(PortType::SOFTWARE) {
+            parts.push("software");
+        }
+        if self.kind.contains(PortType::APPLICATION) {
+            parts.push("application");
+        }
+        if self.kind.contains(PortType::SYNTHESIZER) {
+            parts.push("synthesizer");
+        }
+        if self.kind.contains(PortType::PORT) {
+            parts.push("port");
+        }
+        parts.join(", ")
+    }
+
+    /// Whether a DAW *could* write into this port, which is the only thing that
+    /// makes it able to be the source a control surface sends from. Measured
+    /// from ALSA's own capabilities, so a port that is only a destination (a
+    /// capture tool's port, another program's input) is never a candidate.
+    pub fn can_be_a_source(&self) -> bool {
+        self.capability.contains(PortCap::READ) || self.capability.contains(PortCap::SUBS_READ)
     }
 
     /// True when the wanted text names this port: an exact address, or a piece
@@ -127,7 +189,12 @@ fn describe_ports(what: &str, ports: &[Port]) -> String {
         message.push_str("  (nothing at all)\n");
     }
     for port in ports {
-        message.push_str(&format!("  {}\n", port.describe()));
+        let kind = port.describe_kind();
+        if kind.is_empty() {
+            message.push_str(&format!("  {}\n", port.describe()));
+        } else {
+            message.push_str(&format!("  {}  ({kind})\n", port.describe()));
+        }
     }
     message.push_str(
         "Name the port to listen to with -X, either as an address (14:0) or as a\n\
@@ -140,16 +207,23 @@ fn describe_ports(what: &str, ports: &[Port]) -> String {
 /// Every port ALSA knows about, in the order ALSA lists them.
 pub fn ports() -> Result<Vec<Port>, String> {
     let seq = Seq::open(None, None, false).map_err(|err| err.to_string())?;
+    ports_with(&seq)
+}
 
+/// The same list, through a sequencer handle the caller already holds: looking
+/// for a port again (a DAW restart) must not mean opening a second sequencer.
+pub fn ports_with(seq: &Seq) -> Result<Vec<Port>, String> {
     let mut found = Vec::new();
-    for client in ClientIter::new(&seq) {
+    for client in ClientIter::new(seq) {
         let client_name = client.get_name().unwrap_or("").trim().to_string();
-        for port in PortIter::new(&seq, client.get_client()) {
+        for port in PortIter::new(seq, client.get_client()) {
             found.push(Port {
                 client: port.get_client(),
                 port: port.get_port(),
                 client_name: client_name.clone(),
                 port_name: port.get_name().unwrap_or("").trim().to_string(),
+                capability: port.get_capability(),
+                kind: port.get_type(),
             });
         }
     }
@@ -161,6 +235,9 @@ pub struct McuInput {
     seq: Seq,
     port: i32,
     source: Port,
+    /// Why port announcements are unavailable, when they are: the listener still
+    /// works, but a DAW restart would only be noticed at the end of the run.
+    announce_error: Option<String>,
 }
 
 impl McuInput {
@@ -209,23 +286,55 @@ impl McuInput {
             )
             .map_err(|err| err.to_string())?;
 
-        let subscription = PortSubscribe::empty().map_err(|err| err.to_string())?;
-        subscription.set_sender(Addr {
-            client: chosen.client,
-            port: chosen.port,
-        });
-        subscription.set_dest(Addr {
-            client: seq.client_id().map_err(|err| err.to_string())?,
-            port,
-        });
-        seq.subscribe_port(&subscription)
-            .map_err(|err| format!("could not subscribe to {}: {err}", chosen.describe()))?;
-
-        Ok(McuInput {
+        // The DAW's port first: without it there is nothing to listen to.
+        let mut input = McuInput {
             seq,
             port,
             source: chosen.clone(),
-        })
+            announce_error: None,
+        };
+        input
+            .connect(Addr {
+                client: chosen.client,
+                port: chosen.port,
+            })
+            .map_err(|err| format!("could not subscribe to {}: {err}", chosen.describe()))?;
+
+        // …and then ALSA's announce port, so that a *restart* of the DAW can be
+        // noticed while the run goes on. Optional on purpose: losing it costs
+        // promptness, not the listener, so it is reported rather than fatal.
+        if let Err(reason) = input.connect(Addr {
+            client: ANNOUNCE_CLIENT,
+            port: ANNOUNCE_PORT,
+        }) {
+            input.announce_error = Some(reason);
+        }
+
+        Ok(input)
+    }
+
+    /// Subscribes our port to `sender`, so that its events are delivered here.
+    fn connect(&self, sender: Addr) -> Result<(), String> {
+        let subscription = PortSubscribe::empty().map_err(|err| err.to_string())?;
+        subscription.set_sender(sender);
+        subscription.set_dest(Addr {
+            client: self.seq.client_id().map_err(|err| err.to_string())?,
+            port: self.port,
+        });
+        self.seq
+            .subscribe_port(&subscription)
+            .map_err(|err| err.to_string())
+    }
+
+    /// Undoes [`McuInput::connect`], best effort: when the other client died the
+    /// kernel has dropped the subscription already, and an error here says
+    /// nothing about anything we care about.
+    fn disconnect(&self, sender: Addr) {
+        if let Ok(client) = self.seq.client_id() {
+            let _ = self
+                .seq
+                .unsubscribe_port(sender, Addr { client, port: self.port });
+        }
     }
 
     /// Our own port number, so it can be found in a list of connections.
@@ -236,6 +345,52 @@ impl McuInput {
     /// The port we listen to, as it was found.
     pub fn source(&self) -> &Port {
         &self.source
+    }
+
+    /// Why port announcements are unavailable, when they are: everything else
+    /// works, but a DAW restart is then only noticed at the end of the run.
+    pub fn announce_error(&self) -> Option<&str> {
+        self.announce_error.as_deref()
+    }
+
+    /// Whether the port we listen to is still there.
+    ///
+    /// A subscription to a client that went away is dead *and silent*, which is
+    /// indistinguishable from a DAW that has nothing to say - so this is the
+    /// check that tells those two apart.
+    pub fn still_there(&self) -> Result<bool, String> {
+        Ok(ports_with(&self.seq)?.iter().any(|port| {
+            port.client == self.source.client && port.port == self.source.port
+        }))
+    }
+
+    /// Looks for our port again by its name and listens to it where it is now.
+    ///
+    /// A restarted DAW comes back with a new client number; its *name* is the one
+    /// thing that stays. The port's own name is tried first, then the client's,
+    /// and the first match wins - the rule the rest of this file already uses.
+    /// The dead subscription is dropped (best effort) and a new one made, so
+    /// events flow again without the caller restarting anything.
+    pub fn refind(&mut self) -> Result<Port, String> {
+        let ports = ports_with(&self.seq)?;
+        let found = choose(&self.source.port_name, &ports)
+            .or_else(|_| choose(&self.source.client_name, &ports))?;
+
+        if found.client == self.source.client && found.port == self.source.port {
+            // It never went away; only the address was announced again.
+            return Ok(found);
+        }
+
+        self.disconnect(Addr {
+            client: self.source.client,
+            port: self.source.port,
+        });
+        self.connect(Addr {
+            client: found.client,
+            port: found.port,
+        })?;
+        self.source = found.clone();
+        Ok(found)
     }
 
     /// Reads the next message and everything queued behind it into `decoder`.
@@ -265,12 +420,17 @@ impl McuInput {
         let mut read = Read {
             messages: 0,
             overflowed: false,
+            announcements: 0,
         };
 
         loop {
             match input.event_input() {
                 Ok(event) => {
-                    if let Some(bytes) = message_bytes(&event) {
+                    if is_announcement(&event) {
+                        // The sequencer's own bookkeeping, not the DAW's music:
+                        // a client id fed to the decoder would be a note number.
+                        read.announcements += 1;
+                    } else if let Some(bytes) = message_bytes(&event) {
                         for byte in bytes {
                             decoder.push(byte);
                         }
@@ -297,6 +457,27 @@ impl McuInput {
             .event_input_pending(true)
             .map_err(|err| err.to_string())
     }
+}
+
+/// Whether this event is the sequencer's own bookkeeping rather than MIDI.
+///
+/// A subscriber of ALSA's announce port is told when ports and clients appear,
+/// change and go away; those events carry an *address*, not a note, so they must
+/// never reach the decoder: a client id read as a key number would light up a
+/// mute LED. They are counted instead, because they mean the world moved - which
+/// is how a restarted DAW is noticed at all (the subscription to it died with it).
+fn is_announcement(event: &Event) -> bool {
+    matches!(
+        event.get_type(),
+        EventType::PortStart
+            | EventType::PortExit
+            | EventType::PortChange
+            | EventType::ClientStart
+            | EventType::ClientExit
+            | EventType::ClientChange
+            | EventType::PortSubscribed
+            | EventType::PortUnsubscribed
+    )
 }
 
 /// One sequencer event as raw MIDI, or `None` when it is not MIDI we read.
@@ -360,6 +541,7 @@ fn frame_sysex(bytes: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alsa::seq::Connect;
 
     fn port(client: i32, port: i32, client_name: &str, port_name: &str) -> Port {
         Port {
@@ -367,6 +549,9 @@ mod tests {
             port,
             client_name: client_name.to_string(),
             port_name: port_name.to_string(),
+            // What a real one looks like: something a DAW can write into.
+            capability: PortCap::READ | PortCap::SUBS_READ,
+            kind: PortType::MIDI_GENERIC | PortType::HARDWARE,
         }
     }
 
@@ -439,5 +624,53 @@ mod tests {
 
         let without = vec![0x00, 0x66, 0x14, 0x12];
         assert_eq!(frame_sysex(&without), vec![0xf0, 0x00, 0x66, 0x14, 0x12, 0xf7]);
+    }
+
+    #[test]
+    fn an_announcement_is_never_mistaken_for_music() {
+        // Every type ALSA's announce port sends, as the sequencer builds them:
+        // an address, not a note. None of them may become bytes.
+        let address = Addr { client: 20, port: 0 };
+        let connect = Connect {
+            sender: address,
+            dest: Addr { client: 128, port: 0 },
+        };
+        for kind in [
+            EventType::ClientStart,
+            EventType::ClientExit,
+            EventType::ClientChange,
+            EventType::PortStart,
+            EventType::PortExit,
+            EventType::PortChange,
+            EventType::PortSubscribed,
+            EventType::PortUnsubscribed,
+        ] {
+            // Announcements carry an address; the two subscription events carry
+            // that address twice, as a connect.
+            let event = if kind == EventType::PortSubscribed || kind == EventType::PortUnsubscribed {
+                Event::new(kind, &connect)
+            } else {
+                Event::new(kind, &address)
+            };
+            assert!(is_announcement(&event), "{kind:?} has to be an announcement");
+            assert!(
+                message_bytes(&event).is_none(),
+                "{kind:?} must not reach the decoder"
+            );
+        }
+
+        // …while the DAW's own traffic is still music.
+        let note = Event::new(
+            EventType::Noteon,
+            &EvNote {
+                channel: 0,
+                note: 17,
+                velocity: 127,
+                off_velocity: 0,
+                duration: 0,
+            },
+        );
+        assert!(!is_announcement(&note));
+        assert_eq!(message_bytes(&note), Some(vec![0x90, 17, 127]));
     }
 }

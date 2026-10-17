@@ -214,6 +214,13 @@ pub fn run(
             layout.name()
         );
     }
+    if let Some(reason) = input.announce_error() {
+        // Not fatal, but not hidden either: without the announce port a DAW that
+        // restarts is only noticed at the end of the run.
+        println!(
+            "Port announcements are unavailable ({reason}), so a DAW that restarts while this runs will not be noticed."
+        );
+    }
 
     watch_for_interrupts();
 
@@ -223,6 +230,9 @@ pub fn run(
     let mut paging = Paging::new(page, size);
     let mut messages = 0usize;
     let mut overflowed = 0usize;
+    // Whether the DAW's port is known to be gone: the panel then says so rather
+    // than showing a state nobody is reporting any more.
+    let mut waiting = false;
     let mut silent_overflows = 0usize;
     let mut report = [0u8; 64];
 
@@ -232,6 +242,37 @@ pub fn run(
         match input.read_into(&mut decoder) {
             Ok(read) => {
                 messages += read.messages;
+                if read.announcements > 0 {
+                    // The sequencer told us the world moved: a port or a client
+                    // appeared, changed or went away. Our subscription to a DAW
+                    // that died is dead and silent, so this is the moment to look
+                    // whether the port we listen to is still there - and if it is
+                    // not, to find it again by name, which is the one thing a
+                    // restarting DAW keeps.
+                    match input.still_there() {
+                        Ok(true) => {}
+                        Ok(false) => match input.refind() {
+                            Ok(found) => println!(
+                                "The DAW's port went away and came back as {}; listening to it again.",
+                                found.describe()
+                            ),
+                            Err(message) => println!(
+                                "The DAW's port went away and is not back yet ({}); \
+                                 waiting for it to appear.\n({message})",
+                                input.source().describe()
+                            ),
+                        },
+                        Err(message) => println!("Could not look for the DAW's port again: {message}"),
+                    }
+                    // Either way there is nothing to draw from now on until the
+                    // DAW speaks again: the state on the panel would be a memory,
+                    // and a memory is worse than a word.
+                    waiting = true;
+                }
+                if read.messages > 0 {
+                    // It is speaking again, so it is there again.
+                    waiting = false;
+                }
                 if read.overflowed {
                     overflowed += 1;
                     if read.messages == 0 {
@@ -277,7 +318,11 @@ pub fn run(
             }
         }
 
-        let frame = pages::render(paging.page, decoder.studio(), paging.size);
+        let frame = if waiting {
+            crate::screen::waiting_frame()
+        } else {
+            pages::render(paging.page, decoder.studio(), paging.size)
+        };
         if let Some(reports) = screen.reports(&frame) {
             // Both queues are empty at this point, so waiting a few milliseconds
             // costs nothing but frames.

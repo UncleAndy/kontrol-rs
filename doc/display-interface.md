@@ -113,7 +113,7 @@ Each step is verifiable on the panel before the next one starts:
 2. **done** - the capture and the decoder that fills `Studio` from it, opcodes measured rather than guessed: `src/mcu.rs` turns the DAW's bytes into the state, `tests/mcu_capture.rs` feeds it a slice of the real stream (`tests/fixtures/mcu-reaper.txt`, cut out with `tools/mcu-slice.awk`), and opening the port itself is left to the daemon in step 4, so nothing here needs hardware to be verified. The capture is `tools/capture-mcu.sh` (listen to the surface's port with `aseqdump`, walk play/stop, track selection, mute/solo/arm, volume, click/loop, a bank change, a rename, a tempo change and a quiet period, each step marked on the monotonic clock); its log is the only source for the decoder, exactly as the keyboard's own protocol was measured before it was coded;
 3. the FIFO reader and the message overlay;
 4. **done** - *finding* what the service needs, before anything can be kept: the keyboard is found by its family (or by `-v`/`-p`, or by the settings file), and the DAW's port is searched for (`-X auto`) instead of being hard-coded - the command line first, then the search, then the settings file, and a guess between several candidates is said out loud rather than made quietly. `src/presence.rs`, `src/settings.rs`, `-c <path>`;
-5. the service: one program with both halves, the panel in a task of its own that is restarted when it fails and never takes the keystrokes with it, the panel ours with `Ждём DAW` while no DAW is there, plus ownership, paging, sizes and the redraw policy; run by hand at first, as a systemd unit later. Until it exists, `komplement -X <port>` already draws the decoder's state on the panel, live: all four pages reachable with the page buttons, the sizes with SHIFT, and no messages (see the section above).
+5. the service: one program with both halves, the panel in a task of its own that is restarted when it fails and never takes the keystrokes with it, plus ownership, paging, sizes and the redraw policy; run by hand at first, as a systemd unit later. Its two waiting states are already in place: the port search (step 4) and the `WAITING / FOR DAW` screen, which the live view now shows by itself when the port the DAW was on disappears. Until the service exists, `komplement -X <port>` already draws the decoder's state on the panel, live: all four pages reachable with the page buttons, the sizes with SHIFT, no messages, and a restarting DAW followed rather than lost (see the section above).
 
 ## Seeing the decoder before the daemon exists
 
@@ -127,6 +127,29 @@ Steps 3 and 4 are still ahead, so there is a way to put the decoder on the panel
 - This is deliberately not the daemon: no FIFO, no messages, and the display is held only for the run.
 
 What makes it checkable off the hardware is that the parts are separable: the stream is tested against the capture (`tests/mcu_capture.rs`), the port choosing and the picture rule are unit-tested, and `tests/mcu_port_roundtrip.rs` puts a writer port and the listening port in one process and checks the whole path through ALSA - that last one does nothing on a machine without `/dev/snd/seq`, and runs for real where the live view runs.
+
+## A DAW that restarts, and what the panel says meanwhile
+
+A subscription to a client that dies is dead *and silent*: an idle DAW and a DAW that has quit look
+exactly alike to a reader. So the listener subscribes to ALSA's own announce port as well
+(`System:Announce`, client 0 port 1, in `src/mcu_port.rs`) - the only way to be *told* that ports
+and clients appeared or went away. Those events are the sequencer's bookkeeping, not the DAW's
+music: they carry an address rather than a note, so they never reach the decoder; they are counted,
+because they mean the world moved.
+
+On such an announcement the listener asks the cheap question first - is the port I subscribed to
+still in the list? - and when it is not, it looks for the port **by name**, which is the one thing a
+restarting DAW keeps: Reaper comes back as a *new* client with a new number, and the name is what
+makes it findable again (`McuInput::refind`, which drops the dead subscription and makes a new one,
+best effort on the old). Both outcomes are printed. The announce subscription itself is reported if
+it cannot be made: everything still works without it, but a restart would then only be noticed at
+the end of the run.
+
+While the port is gone the panel does not keep showing the last state the DAW sent - that is a
+memory, and a memory is worse than a word. It says `WAITING / FOR DAW` in the medium font
+(`screen::waiting_frame`, also reachable as `-S waiting` so it can be looked at without unplugging
+anything), and it goes back to the pages the moment the DAW speaks again. That is the state the
+owner asked for as «Ждём DAW».
 
 ## What is deliberately absent
 

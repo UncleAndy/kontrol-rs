@@ -87,7 +87,7 @@ Options:
  -S <state>           Show one named state on the display and wait, so it can be
                       looked at or photographed: on, off, top, bottom, left,
                       right, vstripes, hstripes, border, message, nav, navmed,
-                      navmid, navbig, glyphs, text60, and the four live pages
+                      navmid, navbig, glyphs, text60, waiting, and the four live pages
                       page-transport, page-track, page-tracks, page-general -
                       each of those with :small, :medium or :large after it.
 

@@ -113,8 +113,12 @@ pub fn choose_keyboard(
 /// settings file. Discovery only ever accepts a *single* plausible port; a
 /// working machine's port list holds ALSA's own `System`, the keyboard's own
 /// MIDI ports and usually `Midi Through`, and choosing between several of those
-/// by position would be a coin toss. When it cannot decide, the message names
-/// the line that pins the answer instead.
+/// by position would be a coin toss. What counts as plausible is measured
+/// rather than assumed - the port has to be one a DAW could *write* into
+/// (`Port::can_be_a_source`, from ALSA's own capabilities), so a capture tool's
+/// port or another program's input is never offered, and the list the user has
+/// to choose from says what each port is. When it cannot decide, the message
+/// names the line that pins the answer instead.
 pub fn choose_daw_port(
     ports: &[Port],
     named: Option<&str>,
@@ -162,9 +166,12 @@ pub fn choose_daw_port(
 }
 
 /// The ports that could be a DAW's control surface: not ours, not ALSA's own
-/// `System` (the announce and timer clients), and not the keyboard's own MIDI
+/// `System` (the announce and timer clients), not the keyboard's own MIDI
 /// ports - the surface's port is the one the DAW *writes* into, and the
-/// keyboard's ports carry its own notes.
+/// keyboard's ports carry its own notes - and, measured from ALSA rather than
+/// guessed, only ports something could actually write into. A capture tool's
+/// port or another program's input can never be a surface's source, so offering
+/// them would only make the list harder to read.
 fn plausible(ports: &[Port], keyboard: Option<&str>) -> Vec<Port> {
     let own = CLIENT_NAME.to_lowercase();
     ports
@@ -172,7 +179,7 @@ fn plausible(ports: &[Port], keyboard: Option<&str>) -> Vec<Port> {
         .filter(|port| {
             let client = port.client_name.to_lowercase();
             let name = port.port_name.to_lowercase();
-            if client.contains(&own) || client.starts_with("system") {
+            if client.contains(&own) || client.starts_with("system") || !port.can_be_a_source() {
                 return false;
             }
             match keyboard.map(str::to_lowercase) {
@@ -264,10 +271,21 @@ fn nothing_to_take(ports: &[Port], keyboard: Option<&str>) -> String {
         message += "  (nothing at all - is the ALSA sequencer running?)\n";
     }
     for port in ports {
-        message += &format!("  {}\n", port.describe());
+        message += &format!("{}\n", listed(port));
     }
     message + "Is the DAW running, and does its control surface write to a port at all?\n\
                Pin the answer with one line in the settings file (komplement/config):\n  mcu = <name or address>"
+}
+
+/// One line of a list a person has to choose from: the port, and what ALSA says
+/// it is, when it says anything at all.
+fn listed(port: &Port) -> String {
+    let kind = port.describe_kind();
+    if kind.is_empty() {
+        format!("  {}", port.describe())
+    } else {
+        format!("  {}  ({kind})", port.describe())
+    }
 }
 
 fn cannot_tell(
@@ -284,7 +302,7 @@ fn cannot_tell(
     if !candidates.is_empty() {
         message += "The candidates are:\n";
         for port in candidates {
-            message += &format!("  {}\n", port.describe());
+            message += &format!("{}\n", listed(port));
         }
     }
     message += "Everything ALSA offers:\n";
@@ -292,7 +310,7 @@ fn cannot_tell(
         message += "  (nothing at all)\n";
     }
     for port in ports {
-        message += &format!("  {}\n", port.describe());
+        message += &format!("{}\n", listed(port));
     }
     if let Some(named) = named.map(str::trim).filter(|named| !named.is_empty()) {
         message += &format!("-X was given {named:?}, which found nothing.\n");
@@ -310,6 +328,7 @@ fn cannot_tell(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcu_port::{PortCap, PortType};
 
     fn hid(vendor: u16, product: u16, product_name: &str, path: &str) -> DeviceSummary {
         DeviceSummary {
@@ -323,12 +342,29 @@ mod tests {
         }
     }
 
+    /// A port like one a DAW or a hardware interface offers: readable, and so
+    /// able to be a source.
     fn port(client: i32, port: i32, client_name: &str, port_name: &str) -> Port {
         Port {
             client,
             port,
             client_name: client_name.to_string(),
             port_name: port_name.to_string(),
+            capability: PortCap::READ | PortCap::SUBS_READ,
+            kind: PortType::MIDI_GENERIC | PortType::HARDWARE,
+        }
+    }
+
+    /// A port that is only a destination - what a capture tool's port or another
+    /// program's input looks like. It can never be a surface's source.
+    fn sink(client: i32, port: i32, client_name: &str, port_name: &str) -> Port {
+        Port {
+            client,
+            port,
+            client_name: client_name.to_string(),
+            port_name: port_name.to_string(),
+            capability: PortCap::WRITE | PortCap::SUBS_WRITE,
+            kind: PortType::APPLICATION | PortType::SOFTWARE,
         }
     }
 
@@ -496,6 +532,56 @@ mod tests {
         assert!(list.contains("Komplete Kontrol A49 MIDI"), "the full list is still shown: {list}");
         assert!(list.contains("KOMPLEMENTARY MCU IN"), "ours is shown as well: {list}");
         assert!(list.contains("mcu = <name or address>"), "the pin hint stays: {list}");
+    }
+
+    #[test]
+    fn a_port_that_cannot_be_a_source_is_never_a_candidate() {
+        // The owner's machine, minus the keyboard: a `Midi Through` loopback, the
+        // two inputs of a USB interface, a running capture tool and PipeWire's own
+        // ports - the last three of which nothing can be written into by a DAW.
+        let ports = [
+            port(14, 0, "Midi Through", "Midi Through Port-0"),
+            port(16, 0, "Steinberg UR22C", "Steinberg UR22C MIDI 1"),
+            port(16, 1, "Steinberg UR22C", "Steinberg UR22C MIDI 2"),
+            sink(128, 0, "aseqdump", "aseqdump"),
+            sink(144, 0, "PipeWire-System", "input"),
+            sink(145, 0, "PipeWire-RT-Event", "input"),
+            port(20, 0, "KOMPLETE KONTROL A49", "KOMPLETE KONTROL A49 MIDI 1"),
+        ];
+
+        let message =
+            choose_daw_port(&ports, Some("auto"), None, Some("KOMPLETE KONTROL A49")).unwrap_err();
+        let (candidates, everything) = message
+            .split_once("Everything ALSA offers:")
+            .expect("the message lists everything ALSA offers");
+
+        // Three ports a DAW could write into, and the keyboard is still not one.
+        assert!(candidates.contains("Midi Through"), "{candidates}");
+        assert!(candidates.contains("Steinberg UR22C MIDI 1"), "{candidates}");
+        assert!(candidates.contains("Steinberg UR22C MIDI 2"), "{candidates}");
+        assert!(
+            !candidates.contains("aseqdump"),
+            "a destination is no candidate: {candidates}"
+        );
+        assert!(
+            !candidates.contains("PipeWire"),
+            "nor is another program's input: {candidates}"
+        );
+        assert!(!candidates.contains("KOMPLETE KONTROL"), "{candidates}");
+
+        // …while the full list still shows everything, and says what it is.
+        assert!(everything.contains("aseqdump"), "{everything}");
+        assert!(
+            everything.contains("(writable, software, application)"),
+            "the list has to say what a port can do: {everything}"
+        );
+        assert!(everything.contains("(readable, subscribable, hardware)"), "{everything}");
+
+        // With nothing but destinations there is nothing to take at all, and the
+        // message says that rather than "more than one".
+        let only_sinks = [sink(128, 0, "aseqdump", "aseqdump")];
+        let message = choose_daw_port(&only_sinks, None, None, None).unwrap_err();
+        assert!(message.contains("nothing in ALSA's port list"), "{message}");
     }
 
     #[test]
