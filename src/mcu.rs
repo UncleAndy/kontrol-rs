@@ -7,6 +7,7 @@
 //! byte back, so listening cannot disturb the DAW.
 
 use crate::studio::{Digits, BANK_CHANNELS, DISPLAY_DIGITS, Studio, Transport};
+use crate::timecode::TimeLayout;
 
 /// The channel strip LEDs, one block of eight notes per row. Measured:
 /// selecting the first three tracks lit notes 24, 25 and 26 in turn, and
@@ -225,10 +226,19 @@ pub struct Decoder {
     /// The DAW's own display row, kept as digits so one update cannot disturb
     /// the rest of it.
     digits: Digits,
+    /// How those digits are to be read as a time. `AsWritten` unless the user
+    /// says which format the DAW was told to send, because the row does not
+    /// carry that anywhere - see `crate::timecode`.
+    layout: TimeLayout,
 }
 
 impl Decoder {
     pub fn new() -> Decoder {
+        Decoder::with_layout(TimeLayout::AsWritten)
+    }
+
+    /// A decoder that reads the display row in the given format.
+    pub fn with_layout(layout: TimeLayout) -> Decoder {
         Decoder {
             parser: Parser::new(),
             studio: Studio::empty(),
@@ -236,6 +246,7 @@ impl Decoder {
             levels: [0; BANK_CHANNELS],
             selected: None,
             digits: Digits::default(),
+            layout,
         }
     }
 
@@ -250,6 +261,13 @@ impl Decoder {
     /// The state the pages read.
     pub fn studio(&self) -> &Studio {
         &self.studio
+    }
+
+    /// The DAW's own display row, digit by digit, as it was last written. The
+    /// pages read it as text through `Studio`, but a measurement needs the
+    /// values: a dot, a dark digit and a separator differ only in the number.
+    pub fn digits(&self) -> &Digits {
+        &self.digits
     }
 
     /// The meter levels of the bank, one per channel.
@@ -283,7 +301,8 @@ impl Decoder {
             Message::Display { digit, value } => {
                 if self.digits.set(*digit as usize, *value) {
                     self.studio.display = self.digits.text();
-                    self.studio.position = self.digits.timecode();
+                    self.studio.position = self.layout.position(&self.digits);
+                    self.studio.position_short = self.layout.short_position(&self.digits);
                 }
             }
             Message::Name { offset, text } => {

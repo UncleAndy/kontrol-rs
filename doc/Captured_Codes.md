@@ -187,6 +187,14 @@ Through port, as they should.
   and what no clock does. The old note here - "not a clock, because it changed four
   times in seventy seconds" - was reading a display that only *refreshes* when its
   digits change, which for a stopped DAW is never.
+  In Reaper's `H:M:S:F` format the same row carries a time, and the layout was
+  measured the same way (see `src/timecode.rs`, whose tests are two of these rows):
+  the frames are the two rightmost digits, only one separator is sent - a real
+  space (`0x20`), immediately left of the frames - and the fields left of it are
+  two digits each, seconds then minutes then hours. So `000324 00` is
+  `00:03:24:00`, and with leading zeros left out, `3:24:00`. The blanks in the bars and beats row above are dark digits
+  (`0x00`), not separators: the two formats do not mark their fields the same way,
+  and that difference is what the reader keys on.
 * **Faders are pitch bend**, which is why they are easy to miss: one message per
   channel - midi channels 1..8 for the eight strip faders and channel 9 for the
   master - with a signed 14-bit value (`(value + 8192) / 128` is the familiar

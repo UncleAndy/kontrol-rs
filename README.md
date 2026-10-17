@@ -131,12 +131,19 @@ out, including on Ctrl+C; a frame the panel already shows is never sent twice, a
 back to the DAW. The whole queue is drained into the state before anything is drawn, and the panel is
 written at most twenty times a second: a DAW sends in bursts (nine pitch bends at once, hundreds of
 aftertouch events a second while playing) and drawing per message runs the sequencer's queue over -
-`ENOSPC`, which is where the first hardware run ended. Paging by the two buttons, messages and the
-daemon itself are still to come.
+`ENOSPC`, which is where the first hardware run ended. On the way it echoes what the DAW says to the
+console as it changes (at most four lines a second, none while it is idle; `-q` keeps it silent) and
+prints the last state - transport, position, display, track - when the display goes back. Paging by the
+two buttons, messages and the daemon itself are still to come.
 
 The position on that screen is the DAW's *own* display, decoded from its twelve seven-segment digits
 (controllers 64..75, numbered from the right, dot in bit 6): `Studio::position` is the ten-digit
-timecode and `Studio::display` the whole row, holes included. So the track page leads with position and
+timecode and `Studio::display` the whole row, holes included. Its meaning depends on the format the DAW
+was told to send, and the row does not carry that format anywhere - so `-T h:m:s:f` names it
+(`src/timecode.rs`; measured against the DAW's own transport, where `000324 00` is `00:03:24:00`), and
+the default `-T written` draws the digits exactly as they arrived. Leading zeros are left out, so the
+panel reads `3:24:00`, and a size with no room for the whole time gets its short form - the seconds,
+with the minutes in front - so the large size still says `3:24`. So the track page leads with position and
 transport, which is what has to survive the small size; the mute, solo and arm marks ride on the name
 line instead of taking a line of their own.
 

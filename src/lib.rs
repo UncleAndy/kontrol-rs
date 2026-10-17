@@ -46,6 +46,7 @@ pub mod pages;
 pub mod preset;
 pub mod screen;
 pub mod studio;
+pub mod timecode;
 pub mod uinput;
 
 /// Parses the options of `komplement` in the same way `getopt()` does in the C

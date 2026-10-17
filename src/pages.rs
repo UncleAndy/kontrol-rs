@@ -19,6 +19,9 @@ pub struct Line {
     pub bar: Option<f32>,
     /// Drawn against the right edge.
     pub right: String,
+    /// A shorter form of `left`, for a size that leaves no room for the whole of
+    /// it. `None` means the text is simply clipped at its end, as it always was.
+    pub short: Option<String>,
 }
 
 impl Line {
@@ -27,6 +30,7 @@ impl Line {
             left: left.into(),
             bar: None,
             right: String::new(),
+            short: None,
         }
     }
 
@@ -35,6 +39,7 @@ impl Line {
             left: left.into(),
             bar: None,
             right: right.into(),
+            short: None,
         }
     }
 
@@ -43,7 +48,21 @@ impl Line {
             left: left.into(),
             bar: Some(fraction),
             right: right.into(),
+            short: None,
         }
+    }
+
+    /// What to draw instead of `left` when the size cannot show all of it.
+    ///
+    /// It exists for values whose *end* is the part that matters - a time is read
+    /// for the seconds, not for the hours - because the alternative is the first
+    /// few characters and a reader who cannot tell where the DAW is. An empty
+    /// text means there is nothing shorter to say, and the full text is clipped
+    /// as before.
+    pub fn shortened(mut self, text: impl Into<String>) -> Line {
+        let text = text.into();
+        self.short = if text.is_empty() { None } else { Some(text) };
+        self
     }
 }
 
@@ -68,14 +87,16 @@ const BOTTOM_ROW: usize = 25;
 pub fn lines(page: Page, studio: &Studio) -> Vec<Line> {
     match page {
         Page::Transport => vec![
-            Line::two_sided(&studio.position, studio.transport.word()),
+            Line::two_sided(&studio.position, studio.transport.word())
+                .shortened(&studio.position_short),
             Line::text(studio.transport_flags()),
         ],
         Page::Track => vec![
             // The position and the transport come first, because the size
             // decides how many lines fit and these two are what has to be
             // readable while the DAW plays, even at the smallest size.
-            Line::two_sided(&studio.position, studio.transport.word()),
+            Line::two_sided(&studio.position, studio.transport.word())
+                .shortened(&studio.position_short),
             Line::two_sided(
                 format!("{} {}", studio.track_number, studio.track_name),
                 studio.flags(),
@@ -147,7 +168,7 @@ fn draw_line(frame: &mut Frame, line: &Line, size: Size, row: usize) {
         left_capacity = left_capacity.saturating_sub(2);
     }
 
-    let (left, left_characters) = fit(&line.left, left_capacity);
+    let (left, left_characters) = fitted_left(line, left_capacity);
     draw_text(frame, size, 0, row, &left);
 
     if let Some(fraction) = line.bar {
@@ -261,6 +282,21 @@ fn fit(text: &str, limit: usize) -> (String, usize) {
     (clipped, characters)
 }
 
+/// The left text that fits, and how many characters it took.
+///
+/// A line may carry a shorter form for the case where the whole of it does not
+/// fit; that form is used instead of clipping, and is itself clipped if even it
+/// is too long. A line without one is clipped at its end exactly as before.
+fn fitted_left(line: &Line, limit: usize) -> (String, usize) {
+    if line.left.chars().count() <= limit {
+        return fit(&line.left, limit);
+    }
+    match &line.short {
+        Some(short) => fit(short, limit),
+        None => fit(&line.left, limit),
+    }
+}
+
 fn clip_to(text: &str, limit: usize) -> String {
     text.chars().take(limit).collect()
 }
@@ -270,6 +306,47 @@ mod tests {
     use super::*;
     use crate::screen::{PAGE_BYTES, PAGES};
     use crate::studio::Transport;
+
+    #[test]
+    fn the_track_page_leads_with_the_position_and_the_transport() {
+        // What the owner asked to see while the DAW plays: where it is and
+        // whether it is moving, before anything else on the page.
+        let studio = Studio::sample();
+        let lines = lines(Page::Track, &studio);
+        assert_eq!(lines[0].left, studio.position);
+        assert_eq!(lines[0].right, studio.transport.word());
+        assert!(
+            studio.position.chars().count() + studio.transport.word().chars().count() + 1
+                <= Size::Medium.line_characters(),
+            "position and transport have to fit one line at the medium size"
+        );
+    }
+
+    #[test]
+    fn a_narrow_size_shows_the_end_of_the_position_rather_than_its_start() {
+        // At the large size the whole time does not fit beside the transport
+        // word. What is drawn then is the short form - the seconds, with the
+        // minutes in front - and never the first few characters, which would drop
+        // the only part that says where the DAW is.
+        let mut page_lines = lines(Page::Track, &Studio::sample());
+        let line = page_lines.remove(0);
+        let capacity = Size::Large
+            .line_characters()
+            .saturating_sub(line.right.chars().count())
+            .saturating_sub(1);
+
+        assert!(
+            line.left.chars().count() > capacity,
+            "the whole time must not fit at the large size, or this proves nothing"
+        );
+        assert_eq!(fitted_left(&line, capacity).0, "3:24");
+    }
+
+    #[test]
+    fn a_line_without_a_short_form_is_clipped_at_its_end_as_before() {
+        let line = Line::two_sided("A NAME TOO LONG TO DRAW", "MS");
+        assert_eq!(fitted_left(&line, 4).0, "A NA");
+    }
 
     /// Which of a size's lines carry pixels: the honest count of drawn lines. A
     /// glyph of the medium or the large size is taller than a page-block, so

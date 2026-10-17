@@ -30,7 +30,7 @@ extern "C" fn handle_interrupt(_signal: libc::c_int) {
 
 /// The options the parser accepts, in `getopt` notation. The usage text and the
 /// parser must agree; a test below checks that they do.
-const SHORT_OPTIONS: &str = "hv:p:m:o:qnsxdhalS:X:";
+const SHORT_OPTIONS: &str = "hv:p:m:o:qnsxdhalS:X:T:";
 
 fn print_usage(argv0: &str) {
     println!("{}", usage_text(argv0));
@@ -90,6 +90,12 @@ Options:
                       -S page-track:large the page and the glyph size are chosen
                       (default: page-track at medium). Ctrl+C stops it. See
                       doc/display-interface.md.
+
+ -T <format>          How to read the DAW's time display in -X. The row carries
+                      no punctuation Reaper actually sends, so the format has to
+                      be named the way the DAW names it: h:m:s:f for that format
+                      (measured) or written for the row exactly as it arrived
+                      (the default). See doc/display-interface.md.
 
 Advanced options:
  -p <productId>       USB product ID (in case you want to try other hardware).
@@ -173,6 +179,7 @@ fn main() {
     let mut screen_probe = false;
     let mut screen_state: Option<String> = None;
     let mut mcu_input: Option<String> = None;
+    let mut time_layout = kontrol_rs::timecode::TimeLayout::AsWritten;
     let mut parsed_options = 0usize;
 
     let mut options = GetOpt::new(
@@ -199,6 +206,16 @@ fn main() {
             's' => screen_probe = true,
             'S' => screen_state = Some(value),
             'X' => mcu_input = Some(value),
+            'T' => {
+                match kontrol_rs::timecode::TimeLayout::from_name(&value) {
+                    Some(layout) => time_layout = layout,
+                    None => {
+                        eprintln!("Unknown time display format: {value}");
+                        eprintln!("Use -T h:m:s:f for Reaper's hour format, or -T written for the row as it arrives.");
+                        exit(1);
+                    }
+                }
+            }
             other => {
                 eprintln!("Unknown option: -{other}");
                 print_usage(&argv0);
@@ -249,7 +266,7 @@ fn main() {
                     }
                 };
                 let _ = hid.write_raw(&[0xa0, 0x03, 0x04]);
-                let outcome = kontrol_rs::live::run(&hid, input, page, size, quiet);
+                let outcome = kontrol_rs::live::run(&hid, input, page, size, quiet, time_layout);
                 let _ = hid.write_raw(&[0xa0, 0x07, 0x00]);
                 if let Err(message) = outcome {
                     println!("{message}");

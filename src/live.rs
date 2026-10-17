@@ -20,7 +20,8 @@ use crate::mcu::Decoder;
 use crate::mcu_port::McuInput;
 use crate::pages;
 use crate::screen::{self, Frame};
-use crate::studio::{Page, Size};
+use crate::studio::{Digits, Page, Size, Studio};
+use crate::timecode::TimeLayout;
 
 /// Set from the signal handler; the loop stops when it becomes true.
 static STOP: AtomicBool = AtomicBool::new(false);
@@ -105,6 +106,46 @@ impl Pace {
     }
 }
 
+/// What the DAW says, echoed to the console, so that the panel's own display can
+/// be measured from a paste rather than from a photograph of the keyboard.
+///
+/// It speaks on change only, and no more than four times a second: a display
+/// that is moving is worth reading while it moves, an idle one is worth silence.
+/// The values are printed as the DAW wrote them, because a dot, a dark digit and
+/// a separator differ by the number alone - the rendering in between loses that
+/// difference.
+#[derive(Default)]
+pub struct Echo {
+    last: Option<String>,
+    at: Option<Instant>,
+}
+
+impl Echo {
+    pub const MIN_GAP: Duration = Duration::from_millis(250);
+
+    /// The line to print, if this is a moment worth printing at.
+    pub fn line(&mut self, studio: &Studio, digits: &Digits, now: Instant) -> Option<String> {
+        let values = digits.raw_text();
+        if self.last.as_deref() == Some(values.as_str()) {
+            return None;
+        }
+        if let Some(at) = self.at {
+            if now.saturating_duration_since(at) < Echo::MIN_GAP {
+                return None;
+            }
+        }
+        self.last = Some(values.clone());
+        self.at = Some(now);
+        Some(format!(
+            "DAW display {:?}; position {:?}; transport {}; values (digit 0 is the rightmost) {}",
+            digits.text(),
+            studio.position,
+            studio.transport.word(),
+            values
+        ))
+    }
+}
+
 /// The page and size a name like `page-track:large` asks for. A name without a
 /// colon keeps `default_page`; one without a size keeps `default_size`. This is
 /// the same convention the named states use, so `-S` can serve both.
@@ -130,6 +171,7 @@ pub fn run(
     page: Page,
     size: Size,
     quiet: bool,
+    layout: TimeLayout,
 ) -> Result<(), String> {
     if !quiet {
         println!(
@@ -139,17 +181,19 @@ pub fn run(
             crate::mcu_port::CLIENT_NAME
         );
         println!(
-            "Drawing page {:?} at {:?} size. Nothing is sent to the DAW; Ctrl+C gives the display back.",
+            "Drawing page {:?} at {:?} size, reading the time display as {:?}. Nothing is sent to the DAW; Ctrl+C gives the display back.",
             page.name(),
-            size.name()
+            size.name(),
+            layout.name()
         );
     }
 
     watch_for_interrupts();
 
-    let mut decoder = Decoder::new();
+    let mut decoder = Decoder::with_layout(layout);
     let mut screen = Screen::new();
     let mut pace = Pace::default();
+    let mut echo = Echo::default();
     let mut messages = 0usize;
     let mut overflowed = 0usize;
     let mut silent_overflows = 0usize;
@@ -189,6 +233,12 @@ pub fn run(
             }
         }
 
+        if !quiet {
+            if let Some(line) = echo.line(decoder.studio(), decoder.digits(), Instant::now()) {
+                println!("{line}");
+            }
+        }
+
         let frame = pages::render(page, decoder.studio(), size);
         if let Some(reports) = screen.reports(&frame) {
             // The DAW's queue is empty at this point, so waiting a few
@@ -214,8 +264,10 @@ pub fn run(
             }
         );
         println!(
-            "Last state: transport {}, track {} {:?}, first channel {:?}.",
+            "Last state: transport {}, position {:?}, display {:?}, track {} {:?}, first channel {:?}.",
             studio.transport.word(),
+            studio.position,
+            studio.display,
             studio.track_number,
             studio.track_name,
             studio.bank.first().map(|channel| channel.name.as_str()).unwrap_or("")
@@ -301,6 +353,41 @@ mod tests {
         assert_eq!(
             page_and_size("nonsense:nonsense", Page::Track, Size::Medium),
             (Page::Track, Size::Medium)
+        );
+    }
+
+    #[test]
+    fn the_echo_speaks_on_change_and_not_more_than_four_times_a_second() {
+        let studio = crate::studio::Studio::sample();
+        let mut digits = Digits::default();
+        let mut echo = Echo::default();
+        let t0 = Instant::now();
+
+        let line = echo
+            .line(&studio, &digits, t0)
+            .expect("the first row is worth saying");
+        assert!(
+            line.contains("DAW display \""),
+            "the line carries the row as the panel shows it: {line}"
+        );
+        assert!(
+            line.contains("0:0 "),
+            "and the values as the DAW wrote them: {line}"
+        );
+
+        assert!(
+            echo.line(&studio, &digits, t0 + Duration::from_secs(1)).is_none(),
+            "the same row said twice is nothing new"
+        );
+
+        digits.set(0, b'7'); // the rightmost digit becomes a seven
+        assert!(
+            echo.line(&studio, &digits, t0 + Duration::from_millis(100)).is_none(),
+            "a change inside the gap waits rather than flooding the console"
+        );
+        assert!(
+            echo.line(&studio, &digits, t0 + Duration::from_millis(400)).is_some(),
+            "once the gap has passed the change is said"
         );
     }
 

@@ -232,6 +232,10 @@ pub struct Studio {
     pub solo: bool,
     pub armed: bool,
     pub position: String,
+    /// The same position in the form a narrow panel can carry: the part of it
+    /// that says where the DAW is right now. Empty when the stream's format has
+    /// nothing shorter to say, and then the full text is what gets clipped.
+    pub position_short: String,
     /// The DAW's whole twelve-digit row as text, holes and all: what its own
     /// display shows, next to the timecode `position` holds on its own.
     pub display: String,
@@ -284,6 +288,21 @@ impl Digits {
         self.render(0..DISPLAY_DIGITS)
     }
 
+    /// The values exactly as the DAW wrote them, digit zero first. This is what
+    /// a measurement needs: the dot bit, a dark digit and a separator are only
+    /// told apart by the value itself.
+    pub fn raw(&self) -> &[u8; DISPLAY_DIGITS] {
+        &self.0
+    }
+
+    /// The row with every digit named, for a console line.
+    pub fn raw_text(&self) -> String {
+        (0..DISPLAY_DIGITS)
+            .map(|index| format!("{}:{}", 64 + index, self.0[index]))
+            .collect::<Vec<String>>()
+            .join(" ")
+    }
+
     /// The timecode part of it: the ten rightmost digits.
     pub fn timecode(&self) -> String {
         self.render(0..TIMECODE_DIGITS)
@@ -327,6 +346,7 @@ impl Studio {
             solo: false,
             armed: false,
             position: String::new(),
+            position_short: String::new(),
             display: String::new(),
             transport: Transport::Stopped,
             looping: false,
@@ -352,8 +372,9 @@ impl Studio {
             mute: false,
             solo: true,
             armed: true,
-            position: " 12 3  456".to_string(),
-            display: "01 12 3  456".to_string(),
+            position: "3:24:00".to_string(),
+            position_short: "3:24".to_string(),
+            display: "01 000324 00".to_string(),
             transport: Transport::Playing,
             looping: true,
             click: false,
