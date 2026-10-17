@@ -70,6 +70,13 @@ pub const KEYBOARD_RETRY_MILLIS: u64 = 500;
 /// bit 15 Page Right in the third report byte), and SHIFT is bit 0.
 const PAGE_LEFT: u64 = 1 << 14;
 const PAGE_RIGHT: u64 = 1 << 15;
+
+/// The same two buttons as the numbers a mapping and the LED picture are indexed
+/// by, so the merged mode can light them: they are not in the mapping (the owner
+/// took them out of it deliberately) but the program acts on them, and an unlit
+/// button on this keyboard reads as "nothing here".
+const PAGE_LEFT_BUTTON: usize = PAGE_LEFT.trailing_zeros() as usize;
+const PAGE_RIGHT_BUTTON: usize = PAGE_RIGHT.trailing_zeros() as usize;
 const SHIFT: u64 = 1;
 
 /// Which page at which size the panel is showing, and what its buttons do.
@@ -214,6 +221,10 @@ pub fn run(
     // there now, and lit again whenever the keyboard comes back.
     let mut leds_refused = false;
     if let (Some(keys), Some(device)) = (keys.as_mut(), keyboard.as_ref()) {
+        // The two page buttons are this program's own: they turn the page and,
+        // with SHIFT, change the glyph size. They are lit with the mapped ones,
+        // because an unlit button on this keyboard reads as "nothing here".
+        keys.acts_on(&[PAGE_LEFT_BUTTON, PAGE_RIGHT_BUTTON]);
         if let Some(reason) = keys.light_up(device) {
             leds_refused = true;
             if !quiet {

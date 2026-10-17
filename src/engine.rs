@@ -50,6 +50,12 @@ pub struct Engine {
     held_layer: [Option<Layer>; MAX_BUTTONS],
     dial_position: Option<u8>,
     shift_was_pressed: bool,
+    /// Buttons the program acts on itself, with nothing in the mapping for them.
+    /// In the merged mode those are the two page buttons: they turn the panel's
+    /// page, and with SHIFT they change the glyph size. They are lit like mapped
+    /// buttons, because on this keyboard an unlit button means "nothing here" -
+    /// and these do something, even though no key comes out of them.
+    own_buttons: [bool; MAX_BUTTONS],
 }
 
 impl Engine {
@@ -59,7 +65,23 @@ impl Engine {
             held_layer: [None; MAX_BUTTONS],
             dial_position: None,
             shift_was_pressed: false,
+            own_buttons: [false; MAX_BUTTONS],
         }
+    }
+
+    /// Says that the program acts on this button itself, so its LED is lit even
+    /// though the mapping has nothing for it. Both layers: a button the program
+    /// handles is handled with SHIFT down as well.
+    pub fn acts_on(&mut self, button: usize) {
+        if button < MAX_BUTTONS {
+            self.own_buttons[button] = true;
+        }
+    }
+
+    /// Whether a button is lit in the picture for a layer: because something is
+    /// mapped to it there, or because the program acts on it itself.
+    fn lit(&self, button: usize, layer: Layer) -> bool {
+        self.own_buttons[button] || self.table.is_mapped(button as i32, layer)
     }
 
     pub fn table(&self) -> &MappingTable {
@@ -91,12 +113,11 @@ impl Engine {
     /// loop stops early when the device does not answer.
     pub fn light_up_initial(&self, sink: &mut impl Sink, animate: bool) {
         for i in 0..TOGGLE_BUTTON_TOTAL {
-            let state =
-                if i == 0 || i == 19 || i == 20 || self.table.is_mapped(i as i32, Layer::Normal) {
-                    LED_ON
-                } else {
-                    LED_OFF
-                };
+            let state = if i == 0 || i == 19 || i == 20 || self.lit(i, Layer::Normal) {
+                LED_ON
+            } else {
+                LED_OFF
+            };
             sink.led(i as i32, state);
             sink.leds_sync();
 
@@ -194,7 +215,7 @@ impl Engine {
         for i in 0..TOGGLE_BUTTON_TOTAL {
             let state = if i == 0 {
                 LED_BRIGHT
-            } else if self.table.is_mapped(i as i32, Layer::Shifted) {
+            } else if self.lit(i, Layer::Shifted) {
                 LED_ON
             } else {
                 LED_OFF
@@ -206,12 +227,11 @@ impl Engine {
 
     fn light_up_normal(&self, sink: &mut impl Sink) {
         for i in 0..TOGGLE_BUTTON_TOTAL {
-            let state =
-                if i == 0 || i == 19 || i == 20 || self.table.is_mapped(i as i32, Layer::Normal) {
-                    LED_ON
-                } else {
-                    LED_OFF
-                };
+            let state = if i == 0 || i == 19 || i == 20 || self.lit(i, Layer::Normal) {
+                LED_ON
+            } else {
+                LED_OFF
+            };
             sink.led(i as i32, state);
         }
         sink.leds_sync();
@@ -299,6 +319,40 @@ mod tests {
         assert_eq!(
             sink.calls,
             vec![Call::Key(57, true), Call::Key(57, false)]
+        );
+    }
+
+    /// A button the program acts on itself is lit without a mapping: on this
+    /// keyboard an unlit button reads as "nothing here", and the page buttons do
+    /// something in the merged mode even though the mapping has nothing for them.
+    #[test]
+    fn a_button_the_program_acts_on_is_lit_without_a_mapping() {
+        let table = table_with(&[(9, Layer::Normal, &[MappedKey::key(57)])]); // Play -> Space
+        let mut engine = Engine::new(table);
+        engine.acts_on(14);
+        let mut sink = Recorder::default();
+
+        engine.light_up_initial(&mut sink, false);
+
+        assert!(
+            sink.calls.contains(&Call::Led(14, LED_ON)),
+            "a button the program acts on has to be lit: {:?}",
+            sink.calls
+        );
+        assert!(
+            sink.calls.contains(&Call::Led(15, LED_OFF)),
+            "and one it does not stays dark: {:?}",
+            sink.calls
+        );
+
+        // With SHIFT down too: a button the program handles is handled then as
+        // well (it changes the glyph size).
+        sink.calls.clear();
+        engine.process(&report(&[0x01]), &mut sink);
+        assert!(
+            sink.calls.contains(&Call::Led(14, LED_ON)),
+            "the shifted picture lights it too: {:?}",
+            sink.calls
         );
     }
 

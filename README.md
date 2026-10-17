@@ -126,8 +126,13 @@ the layout), drawn from a sample `Studio` so they can be judged without a DAW: `
 `page-track:large`, one of `small` (four 5x7 lines), `medium` (three 7x9 lines) or `large` (two lines
 at double scale) - because the size is what SHIFT plus a page button steps through on the panel. A
 page says what it wants on the screen as a few lines, most important first, and the size decides how
-many of them fit; the general page is the exception, drawn as a mixer of eight channels (label, mute
-and solo marks, a fader filled from the bottom) and ignoring the size. How a DAW is meant to feed all
+many of them fit. The tracks page marks the selected track with a star, and the general page is the
+exception: drawn as a mixer of eight channels (number, mute and solo marks, a fader filled from the
+bottom) and ignoring the size. The mixer's columns are numbered, not named - two characters of a name
+read as a number on a strip where every other number means something (a track called "7 Strings" put a
+`7` next to the first track's level and the mixer looked as though it numbered its channels
+7-0-1-2-3-4-5-6) - the numbers line up with the faders and with the bank's range, and the names are on
+the tracks page, in full. How a DAW is meant to feed all
 this - MCU for states, a FIFO for messages - is worked out in `doc/display-interface.md`.
 
 The decoder can be seen on the panel before any daemon exists: `komplement -X <port>` listens to the
@@ -161,7 +166,12 @@ line instead of taking a line of their own.
 
 The medium font (`src/font_medium.rs`, 7x9, sixteen characters per line) is authored as art in
 `tools/font-medium-glyphs.txt` and generated into Rust by `tools/font-medium-table.awk`, which also
-prints a sheet of the whole font as the panel will show it.
+prints a sheet of the whole font as the panel will show it. A font that has no glyph for a character
+draws `?` in its place, so a marker the pages draw *themselves* has to be a character both fonts
+carry: the selected-track marker used to be `>`, the 7x9 font has no `>`, and the panel showed `?`
+next to the selected track until a star took its place (added to the art, which the generator turned
+into the forty-ninth glyph).
+`every_character_the_pages_write_themselves_is_in_both_fonts` keeps that honest.
 
 Controls that are not handled yet are found by capture rather than by guessing:
 `tools/capture-a49.sh` walks the encoders, the 4D dial and the pushes, and
@@ -272,7 +282,9 @@ longer costs the reading side anything.
 mappings/reaper.map` draws the panel and turns the keyboard into keystrokes at the same time, on one
 HID device, with a report read and answered before any frame is drawn. Without `-m` it stays what it
 was - the decoder's view alone. A virtual keyboard that cannot be opened is not fatal there: the panel
-goes on working, and it says so.
+goes on working, and it says so. The two page buttons are lit while it runs, and by the program rather
+than by the mapping: nothing is mapped to them (deliberately), but they are what turns the page and
+changes the size, and on this keyboard an unlit button reads as "nothing here".
 
 This is the *finding* half of the service that is planned; the service itself - one program with
 keystrokes and panel, the panel in a task of its own that is restarted when it fails - is the

@@ -342,15 +342,32 @@ pub const SHEET_COLUMNS: usize = 16;
 /// The pixel row the sheet's lines start on: nine rows of glyphs, two empty.
 pub const SHEET_LINE_PITCH: usize = 11;
 
-/// Every glyph of the medium font, sixteen to a line - three lines of nine rows,
-/// which is what the screen holds. Drawn to be looked at, not to be informative.
+/// Lines the sheet draws the font on, and what the panel holds.
+pub const SHEET_LINES: usize = 3;
+
+/// Glyphs to a line: sixteen fit with the usual one-pixel gap, and that is what
+/// the font had until it grew a forty-ninth glyph - the star the tracks page
+/// marks its selection with. The sheet packs them in rather than dropping the
+/// last one, which is the one worth looking at.
+pub fn sheet_columns() -> usize {
+    SHEET_COLUMNS.max(crate::font_medium::GLYPHS.len().div_ceil(SHEET_LINES))
+}
+
+/// The gap between glyphs on the sheet: the screen's width shared out.
+fn sheet_pitch() -> usize {
+    WIDTH / sheet_columns()
+}
+
+/// Every glyph of the medium font, three lines of nine rows, which is what the
+/// screen holds. Drawn to be looked at, not to be informative.
 pub fn glyph_sheet() -> Frame {
     let mut frame = off();
-    let pitch = crate::font_medium::GLYPH_WIDTH + crate::font_medium::GLYPH_SPACING;
+    let columns = sheet_columns();
+    let pitch = sheet_pitch();
 
     for (index, (character, _)) in crate::font_medium::GLYPHS.iter().enumerate() {
-        let slot = index % SHEET_COLUMNS;
-        let line = index / SHEET_COLUMNS;
+        let slot = index % columns;
+        let line = index / columns;
         draw_text_medium(
             &mut frame,
             slot * pitch,
@@ -869,10 +886,9 @@ mod tests {
 
     #[test]
     fn the_glyph_sheet_shows_every_glyph_on_three_lines() {
-        assert_eq!(
-            crate::font_medium::GLYPHS.len(),
-            SHEET_COLUMNS * 3,
-            "the sheet has room for exactly three lines of glyphs"
+        assert!(
+            crate::font_medium::GLYPHS.len() <= sheet_columns() * SHEET_LINES,
+            "the sheet has to hold the whole font in the three lines the screen has"
         );
 
         let frame = glyph_sheet();

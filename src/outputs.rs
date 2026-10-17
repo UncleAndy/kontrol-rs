@@ -128,6 +128,15 @@ impl<'a> Keys<'a> {
         }
     }
 
+    /// Says that the program acts on these buttons itself - the page buttons in
+    /// the merged mode - so they are lit even though the mapping has nothing for
+    /// them. Called before the first `light_up`.
+    pub fn acts_on(&mut self, buttons: &[usize]) {
+        for button in buttons {
+            self.engine.acts_on(*button);
+        }
+    }
+
     /// Lights the LEDs the way the C tool does after start-up, and reports the
     /// reason when the device refused. Called once on start-up and once more
     /// every time the keyboard comes back, because its LEDs went with it.

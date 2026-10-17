@@ -114,7 +114,7 @@ pub fn lines(page: Page, studio: &Studio) -> Vec<Line> {
                 Line::two_sided(
                     format!(
                         "{}{:>2} {}",
-                        if selected { ">" } else { " " },
+                        if selected { "*" } else { " " },
                         number,
                         channel.name
                     ),
@@ -164,6 +164,19 @@ fn window_start(selected: Option<usize>, total: usize, rows: usize) -> usize {
         // The selected track is in another bank: show this bank from its start.
         None => 0,
     }
+}
+
+/// What a mixer column says at the top: the channel's number, not its name.
+///
+/// A column is sixteen pixels wide, which is two characters in the small font -
+/// two characters of a name read as a number on a strip where every other number
+/// means something, and that is exactly what happened: the owner's first track is
+/// called "7 Strings", so the leftmost column said `7` next to the level of the
+/// first track, and the mixer looked as though it numbered the channels
+/// `7-0-1-2-3-4-5-6`. The number lines up with the faders and with the bank's
+/// range on the bottom line; the names are on the tracks page, in full.
+fn mixer_label(studio: &Studio, index: usize) -> String {
+    format!("{:>2}", usize::from(studio.bank_first_track) + index)
 }
 
 /// A channel's mute/solo flags, two characters wide so the column lines up.
@@ -246,7 +259,7 @@ pub fn mixer(studio: &Studio) -> Frame {
             &mut frame,
             x + 2,
             LABEL_ROW,
-            &clip_to(&channel.name, LABEL_CHARACTERS),
+            &clip_to(&mixer_label(studio, index), LABEL_CHARACTERS),
         );
 
         if channel.mute {
@@ -457,7 +470,7 @@ mod tests {
 
                 let marked = window
                     .iter()
-                    .position(|line| line.left.starts_with('>'))
+                    .position(|line| line.left.starts_with('*'))
                     .unwrap_or_else(|| {
                         panic!("track {number} is selected and the window does not show it")
                     });
@@ -478,13 +491,13 @@ mod tests {
         assert!(
             lines_at(Page::Tracks, &studio, Size::Medium)[0]
                 .left
-                .starts_with('>'),
+                .starts_with('*'),
             "the first track is the first line when it is selected"
         );
         studio.track_number = 8;
         let window = lines_at(Page::Tracks, &studio, Size::Medium);
         assert!(
-            window[2].left.starts_with('>'),
+            window[2].left.starts_with('*'),
             "and the last track is the last line"
         );
     }
@@ -496,7 +509,7 @@ mod tests {
         let window = lines_at(Page::Tracks, &studio, Size::Small);
         assert_eq!(window.len(), 4);
         assert!(window[0].left.contains(" 1 "), "the bank still shows from its start");
-        assert!(!window.iter().any(|line| line.left.starts_with('>')));
+        assert!(!window.iter().any(|line| line.left.starts_with('*')));
     }
 
     #[test]
@@ -509,7 +522,7 @@ mod tests {
 
         let window = lines_at(Page::Tracks, &studio, Size::Small);
         assert!(
-            window.iter().any(|line| line.left.starts_with(">12 ")),
+            window.iter().any(|line| line.left.starts_with("*12 ")),
             "the selected track is numbered from the bank, not from one: {:?}",
             window.iter().map(|line| line.left.as_str()).collect::<Vec<_>>()
         );
@@ -520,16 +533,64 @@ mod tests {
         );
     }
 
+    /// The marker is a star, and a star both fonts have: `>` was the marker
+    /// before, and the 7x9 font the medium size draws with has no `>` - so the
+    /// panel showed the `?` a font falls back to, next to the selected track.
     #[test]
-    fn the_tracks_page_marks_the_selected_track() {
+    fn the_tracks_page_marks_the_selected_track_with_a_star() {
         let studio = Studio::sample();
         let marked: Vec<String> = lines(Page::Tracks, &studio)
             .iter()
             .map(|line| line.left.clone())
             .collect();
-        assert!(marked[1].starts_with('>'), "the selected track is not marked");
-        assert!(!marked[0].starts_with('>'));
-        assert_eq!(marked[1], "> 2 BASS DI");
+        assert!(
+            marked[1].starts_with('*'),
+            "the selected track is not marked: {:?}",
+            marked[1]
+        );
+        assert!(!marked[0].starts_with('*'));
+        assert_eq!(marked[1], "* 2 BASS DI");
+    }
+
+    /// The mixer numbers its columns the way the faders are wired, so the
+    /// leftmost number belongs to the leftmost level indicator.
+    #[test]
+    fn the_mixer_numbers_its_columns_like_the_faders() {
+        let mut studio = Studio::sample();
+        studio.bank_first_track = 9;
+        assert_eq!(mixer_label(&studio, 0), " 9");
+        assert_eq!(mixer_label(&studio, 7), "16");
+        studio.bank_first_track = 1;
+        assert_eq!(mixer_label(&studio, 0), " 1");
+    }
+
+    /// A font with no glyph for a character draws `?` instead, and that is how
+    /// the selected-track marker came to look like a question mark at medium
+    /// size. Everything the pages write *themselves* has to be drawable in both
+    /// fonts - the DAW's own track names are the one thing we cannot promise.
+    #[test]
+    fn every_character_the_pages_write_themselves_is_in_both_fonts() {
+        let written = [
+            "* - . : / 0123456789",
+            "VOL PAN",
+            "M S ARM - - --- MS M- -S --",
+            "PLAY STOP REC PAUSE LOOP CLICK",
+            "WAITING FOR DAW",
+        ];
+        for text in written {
+            for character in text.chars() {
+                assert_ne!(
+                    crate::font::glyph(character),
+                    crate::font::glyph('?'),
+                    "{character:?} has no glyph in the 5x7 font"
+                );
+                assert_ne!(
+                    crate::font_medium::glyph(character),
+                    crate::font_medium::glyph('?'),
+                    "{character:?} has no glyph in the 7x9 font"
+                );
+            }
+        }
     }
 
     #[test]
