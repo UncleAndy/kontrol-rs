@@ -13,8 +13,9 @@ use std::time::Duration;
 
 use alsa::seq::{MidiEvent, PortCap, PortType, Seq};
 
+use kontrol_rs::knobs::fader_message;
 use kontrol_rs::mcu::Decoder;
-use kontrol_rs::mcu_port::{ports, McuInput};
+use kontrol_rs::mcu_port::{ports, McuInput, CLIENT_NAME};
 
 /// The name of the port this test writes from.
 const WRITER: &str = "kontrol-rs test writer";
@@ -215,4 +216,76 @@ fn a_writer_that_comes_back_under_the_same_name_is_listened_to_again() {
     }
 
     assert!(decoder.studio().bank[1].mute, "the mute LED of the second strip");
+}
+
+/// What a surface says *back*: `send` on our own port reaches whoever subscribed
+/// to it - which is what a DAW's Mackie Control *input* does when it is pointed
+/// at us, and the way the first knob moves the current track's level.
+#[test]
+fn what_our_port_sends_reaches_the_daw() {
+    if !sequencer_available() {
+        println!(
+            "No /dev/snd/seq on this machine, so there is no sequencer to test against.\n\
+             This test needs ALSA and does nothing without it - run `cargo test` where the\n\
+             keyboard and the live view live, and it checks the whole sending path there."
+        );
+        return;
+    }
+
+    // A stand-in for the DAW's own output, so that our port has something to
+    // listen to and the pair is in the state it is in for real.
+    let writer = Seq::open(None, None, false).expect("a sequencer to write from");
+    writer
+        .set_client_name(&CString::new("kontrol-rs test").expect("a name"))
+        .expect("naming the client");
+    writer
+        .create_simple_port(
+            &CString::new(WRITER).expect("a name"),
+            PortCap::READ | PortCap::SUBS_READ,
+            PortType::MIDI_GENERIC | PortType::APPLICATION,
+        )
+        .expect("the stand-in DAW's port");
+
+    let surface = McuInput::open(WRITER).expect("the surface, subscribing to the stand-in DAW");
+    // Our own port has to be readable *and* writable: a bridge in front of a DAW
+    // decides what the DAW can read from an ALSA port by its capabilities, and
+    // publishes a JACK output (a DAW's MIDI input) only for a readable port.
+    // Without that half the surface is invisible to Reaper, which is a fault
+    // that only shows up on a machine with a bridge in the way.
+    let ours = ports()
+        .expect("a list of ports")
+        .into_iter()
+        .find(|port| port.describe().contains(CLIENT_NAME))
+        .expect("our own port, in ALSA's list");
+    assert!(
+        ours.can_be_a_source() && ours.can_be_a_destination(),
+        "the surface's port must be readable as well as writable: {}",
+        ours.describe()
+    );
+    // The DAW's input, standing in for Reaper's: a listener on the surface's own
+    // port, which is where a level goes when the knob is turned.
+    let mut daw = McuInput::open(CLIENT_NAME).expect("the DAW, subscribing to the surface");
+
+    let wanted = fader_message(0, 0.5);
+    surface.send(&wanted).expect("sending a fader position");
+
+    let mut decoder = Decoder::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut messages = 0;
+    while std::time::Instant::now() < deadline && messages == 0 {
+        messages += daw
+            .read_into(&mut decoder)
+            .expect("reading on the DAW's side")
+            .messages;
+        if messages == 0 {
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    assert_eq!(messages, 1, "one fader move should arrive, and nothing else");
+    let fader = decoder.studio().bank[0].fader;
+    assert!(
+        (fader - 0.5).abs() < 0.001,
+        "the level went out as {wanted:02x?} and arrived as {fader}"
+    );
 }

@@ -23,7 +23,7 @@ pub const DIRECTORY: &str = "komplement";
 pub const FILE_NAME: &str = "config";
 
 /// The settings of the program itself. `None` means "not said here".
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Settings {
     /// USB vendor id of the keyboard, in hex (`17cc`).
     pub vid: Option<u16>,
@@ -37,6 +37,15 @@ pub struct Settings {
     /// piece of its name (`Midi Through`). What discovery falls back to when it
     /// cannot decide, and what `-X` uses when its own argument finds nothing.
     pub mcu: Option<String>,
+    /// Which knob does what: `knob1 = volume` moves the current track's level
+    /// over MCU, `knob1 = none` leaves the knobs read but silent.
+    pub knob1: Option<String>,
+    /// How much of the full travel one detent of the first knob is worth, as a
+    /// fraction: `knob1_step = 0.05` is twenty detents across the whole travel.
+    pub knob1_step: Option<f32>,
+    /// The same with SHIFT held: `knob1_step_shift = 0.005` is two hundred
+    /// detents across the whole travel, for setting a level to the decibel.
+    pub knob1_step_shift: Option<f32>,
 }
 
 impl Settings {
@@ -48,6 +57,44 @@ impl Settings {
             _ => PathBuf::from(std::env::var_os("HOME")?).join(".config"),
         };
         Some(base.join(DIRECTORY).join(FILE_NAME))
+    }
+
+    /// Whether the first knob drives the current track's level.
+    ///
+    /// On unless the settings say otherwise: a knob that does nothing is the
+    /// surprise, not one that moves a fader - and `knob1 = none` is how a user
+    /// says "read them, but say nothing".
+    pub fn knob1_volume(&self) -> bool {
+        match self.knob1.as_deref() {
+            Some(value) => !matches!(
+                value.trim().to_lowercase().as_str(),
+                "none" | "off" | "false" | "no"
+            ),
+            None => true,
+        }
+    }
+
+    /// How much of the full travel one detent of the first knob is worth.
+    ///
+    /// Anything a hand-written file can say is checked here rather than trusted:
+    /// a fraction of nothing, a negative number, a fraction above the whole
+    /// travel, or a number that is not a number at all falls back to the
+    /// measured default instead of moving a fader by an infinity.
+    pub fn knob1_step(&self) -> f32 {
+        match self.knob1_step {
+            Some(step) if step.is_finite() && step > 0.0 && step <= 1.0 => step,
+            _ => crate::knobs::DEFAULT_VOLUME_STEP,
+        }
+    }
+
+    /// The same with SHIFT held on the keyboard. Checked the same way, and the
+    /// default is finer than the plain step: with SHIFT the knob becomes a fine
+    /// adjustment rather than doing nothing.
+    pub fn knob1_step_shift(&self) -> f32 {
+        match self.knob1_step_shift {
+            Some(step) if step.is_finite() && step > 0.0 && step <= 1.0 => step,
+            _ => crate::knobs::DEFAULT_SHIFT_STEP,
+        }
     }
 
     /// Reads the settings, if the file is there.
@@ -110,6 +157,15 @@ impl Settings {
                 "uinput" => settings.uinput = Some(value.to_string()),
                 "mapping" => settings.mapping = Some(value.to_string()),
                 "mcu" => settings.mcu = Some(value.to_string()),
+                "knob1" => settings.knob1 = Some(value.to_string()),
+                "knob1_step" => match value.trim().parse::<f32>() {
+                    Ok(step) => settings.knob1_step = Some(step),
+                    Err(_) => notes.push(not_a_number(&key, value)),
+                },
+                "knob1_step_shift" => match value.trim().parse::<f32>() {
+                    Ok(step) => settings.knob1_step_shift = Some(step),
+                    Err(_) => notes.push(not_a_number(&key, value)),
+                },
                 other => notes.push(format!("{other:?} is not a setting this tool knows; ignored")),
             }
         }
@@ -165,6 +221,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_first_knob_moves_the_level_unless_the_settings_say_no() {
+        // On by default: a knob that does nothing is the surprise, not one that
+        // moves a fader.
+        assert!(Settings::default().knob1_volume());
+        assert!(Settings::parse("knob1 = volume\n").0.knob1_volume());
+        assert!(!Settings::parse("knob1 = none\n").0.knob1_volume());
+        assert!(!Settings::parse("knob1 = OFF\n").0.knob1_volume());
+        // The step is a setting too, and anything unusable falls back rather
+        // than being obeyed: no zero, no negatives, nothing above the travel.
+        assert!((Settings::parse("knob1_step = 0.05\n").0.knob1_step() - 0.05).abs() < 1e-6);
+        assert_eq!(Settings::default().knob1_step(), crate::knobs::DEFAULT_VOLUME_STEP);
+        assert_eq!(
+            Settings::parse("knob1_step = 0\n").0.knob1_step(),
+            crate::knobs::DEFAULT_VOLUME_STEP
+        );
+        assert_eq!(
+            Settings::parse("knob1_step = 7\n").0.knob1_step(),
+            crate::knobs::DEFAULT_VOLUME_STEP
+        );
+        // And the SHIFT step, which defaults to the fine hand rather than to
+        // doing nothing at all.
+        assert_eq!(
+            Settings::default().knob1_step_shift(),
+            crate::knobs::DEFAULT_SHIFT_STEP
+        );
+        assert!((Settings::parse("knob1_step_shift = 0.001\n").0.knob1_step_shift() - 0.001).abs() < 1e-7);
+        assert_eq!(
+            Settings::parse("knob1_step_shift = -1\n").0.knob1_step_shift(),
+            crate::knobs::DEFAULT_SHIFT_STEP
+        );
+        assert_eq!(
+            crate::knobs::volume_step(true, 0.02, 0.005),
+            0.005,
+            "SHIFT is the fine hand"
+        );
+        assert_eq!(crate::knobs::volume_step(false, 0.02, 0.005), 0.02);
+    }
+
+    #[test]
     fn every_setting_is_read() {
         let (settings, notes) = Settings::parse(
             "# komplement\n\
@@ -184,6 +279,9 @@ mod tests {
                 uinput: Some("/dev/uinput".to_string()),
                 mapping: Some("mappings/reaper.map".to_string()),
                 mcu: Some("Midi Through".to_string()),
+                knob1: None,
+                knob1_step: None,
+                knob1_step_shift: None,
             }
         );
     }

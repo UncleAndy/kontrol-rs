@@ -164,19 +164,39 @@ pub fn run(
     // one program, one HID device, the panel and the keys at once, with the keys
     // first (a report is read and answered before any frame is drawn).
     mut keys: Option<Keys<'_>>,
+    // Whether the first knob drives the current track's level over MCU: the port
+    // is a source as well as a listener, and this is the one thing the tool says
+    // back to the DAW.
+    volume_by_knob: bool,
+    // How much of the travel one detent is worth. A setting rather than a
+    // constant: the right size is a matter of hands, and the alternative is a
+    // rebuild for every change of mind.
+    volume_step: f32,
+    // The same with SHIFT held: the keyboard's own modifier, so a level can be
+    // set coarsely and then to the decibel without leaving the knob.
+    volume_step_shift: f32,
 ) -> Result<(), String> {
     if !quiet {
         println!(
-            "Listening for Mackie Control Universal messages from {}; our own port is {} ({}).",
+            "Listening for Mackie Control Universal messages from {}; our own port is {} ({} input).",
             input.source().describe(),
             input.port(),
             crate::mcu_port::CLIENT_NAME
         );
         println!(
-            "Drawing page {:?} at {:?} size, reading the time display as {:?}. The two page buttons turn the page, with SHIFT they change the size. Nothing is sent to the DAW; Ctrl+C gives the display back.",
+            "For the knobs to reach the DAW, the Mackie Control surface's MIDI *input* must be {} - its output stays where it is, that is the display.",
+            crate::mcu_port::CLIENT_NAME
+        );
+        println!(
+            "Drawing page {:?} at {:?} size, reading the time display as {:?}. The two page buttons turn the page, with SHIFT they change the size. {}Ctrl+C gives the display back.",
             page.name(),
             size.name(),
-            layout.name()
+            layout.name(),
+            if volume_by_knob {
+                "The first knob moves the current track's level; "
+            } else {
+                "Nothing is sent to the DAW; "
+            }
         );
     }
     if let Some(reason) = input.announce_error() {
@@ -327,6 +347,41 @@ pub fn run(
                     let moved = knobs.read(&report[..length]);
                     if !quiet {
                         crate::knobs::announce(&moved);
+                    }
+                    if volume_by_knob && moved[0] != 0 {
+                        // The first knob, as a surface's fader moves: relative to
+                        // what the DAW last said, on the strip the current track
+                        // occupies in the bank. Never absolute - the level the
+                        // knob finds is where it starts from.
+                        let (strip, track, fader) = {
+                            let studio = decoder.studio();
+                            let strip = studio
+                                .track_number
+                                .saturating_sub(studio.bank_first_track)
+                                as usize;
+                            (
+                                strip,
+                                studio.track_number,
+                                studio.bank.get(strip).map(|channel| channel.fader),
+                            )
+                        };
+                        if let Some(fader) = fader {
+                            // SHIFT on the keyboard is the fine hand, the way it
+                            // is everywhere else: the knob keeps its meaning and
+                            // only the size of a detent changes.
+                            let step = crate::knobs::volume_step(
+                                crate::engine::shift_pressed(&report[..length]),
+                                volume_step,
+                                volume_step_shift,
+                            );
+                            let fraction = crate::knobs::volume(fader, moved[0], step);
+                            let message = crate::knobs::fader_message(strip as u8, fraction);
+                            if let Err(err) = input.send(&message) {
+                                if !quiet {
+                                    println!("Moving track {track}'s level failed: {err}");
+                                }
+                            }
+                        }
                     }
                     // The same report drives the keystroke half: one device, read
                     // once, answered in both worlds - which is what the merge is.

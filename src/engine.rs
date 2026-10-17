@@ -30,6 +30,16 @@ pub trait Sink {
     }
 }
 
+/// The bit SHIFT occupies in the button mask.
+pub const SHIFT_BIT: u64 = 1;
+
+/// Whether SHIFT is held, as the one place that knows which bit it is. The knobs
+/// ask this too: with SHIFT down a detent is worth less, and the state has to be
+/// read the same way in both halves or the two would disagree on the modifier.
+pub fn shift_pressed(packet: &[u8]) -> bool {
+    button_mask(packet) & SHIFT_BIT != 0
+}
+
 /// Extracts the button bits: bits 0..31 from the bytes after the report ID,
 /// bits 32..39 from the fifth byte. Bytes past the report's length are zero.
 pub fn button_mask(packet: &[u8]) -> u64 {
@@ -134,7 +144,7 @@ impl Engine {
     /// Handles one HID report: the state machine of the C tool's main loop.
     pub fn process(&mut self, packet: &[u8], sink: &mut impl Sink) {
         let key_value = button_mask(packet);
-        let shift_is_pressed = key_value & 1 != 0;
+        let shift_is_pressed = key_value & SHIFT_BIT != 0;
 
         if shift_is_pressed != self.shift_was_pressed {
             if shift_is_pressed {

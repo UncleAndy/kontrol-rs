@@ -79,6 +79,50 @@ fn detents(from: u16, to: u16, step: u16, modulus: u16) -> i32 {
     (f64::from(delta) / f64::from(step)).round() as i32
 }
 
+/// How much of the full travel one detent is worth. Two percent rather than one:
+/// a hundred detents to cross the travel was measured as too slow on the
+/// keyboard itself, and the number is a setting (`knob1_step`) for the same
+/// reason - the right size is a matter of hands, not of code.
+pub const DEFAULT_VOLUME_STEP: f32 = 0.02;
+/// The top of a fader's travel, as the MCU's 14-bit value.
+pub const MAX_FADER: u16 = 16383;
+
+/// A knob's move applied to a fader position (0.0 at the bottom, 1.0 at the top).
+///
+/// Relative to what the DAW last said, never absolute: a knob turned on a track
+/// that is already at 0.8 moves it from there, and turning it on another track
+/// picks that track's own level up rather than jumping to the knob's position.
+pub fn volume(current: f32, detents: i32, step: f32) -> f32 {
+    (current + detents as f32 * step).clamp(0.0, 1.0)
+}
+
+/// How much of the full travel one detent is worth with SHIFT held. Finer than
+/// the plain step, which is the convention everywhere else: SHIFT is the fine
+/// hand, and the knob keeps its meaning while the size of a detent changes.
+pub const DEFAULT_SHIFT_STEP: f32 = 0.005;
+
+/// Which of the two steps a detent is worth.
+pub fn volume_step(shift: bool, plain: f32, shifted: f32) -> f32 {
+    if shift {
+        shifted
+    } else {
+        plain
+    }
+}
+
+/// How a Mackie surface moves a fader: pitch bend on the channel's strip, the
+/// position as a 14-bit value. This is the inverse of the decoder's
+/// `(value + 8192) / 16384`, and the round-trip test pins the two together.
+pub fn fader_message(channel: u8, fraction: f32) -> [u8; 3] {
+    let value = (fraction.clamp(0.0, 1.0) * 16384.0).round() as u16;
+    let value = value.min(MAX_FADER);
+    [
+        0xE0 | (channel & 0x0f),
+        (value & 0x7f) as u8,
+        ((value >> 7) & 0x7f) as u8,
+    ]
+}
+
 /// Says which knobs moved, and how far. One line per report that moved
 /// something, and nothing at all otherwise - a quiet keyboard stays quiet.
 pub fn announce(moved: &[i32; KNOBS]) {
@@ -218,5 +262,53 @@ mod tests {
         let mut expected = [0i32; KNOBS];
         expected[0] = 1;
         assert_eq!(knobs.read(&packet([0, 0, 0, 0, 0, 0, 0, 0])), expected);
+    }
+
+    #[test]
+    fn a_fader_message_is_what_the_daw_sends_back() {
+        use crate::mcu::Decoder;
+
+        // The whole point of the pair: what we send is exactly what a surface
+        // sends, so the decoder that reads Reaper must read us too.
+        for (channel, fraction) in [(0u8, 0.0f32), (0, 0.5), (3, 1.0), (7, 0.25)] {
+            let message = fader_message(channel, fraction);
+            let mut decoder = Decoder::new();
+            for byte in message {
+                decoder.push(byte);
+            }
+            let bank = &decoder.studio().bank;
+            let read_back = bank[channel as usize].fader;
+            assert!(
+                (read_back - fraction).abs() < 0.001,
+                "channel {channel}, {fraction} went out as {message:02x?} and came back as {read_back}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_top_and_the_bottom_are_the_ends_of_the_travel() {
+        assert_eq!(fader_message(0, 0.0), [0xE0, 0x00, 0x00]);
+        assert_eq!(fader_message(0, 1.0), [0xE0, 0x7f, 0x7f]);
+        // Out-of-range input is clamped rather than wrapped.
+        assert_eq!(fader_message(0, 2.0), fader_message(0, 1.0));
+        assert_eq!(fader_message(0, -1.0), fader_message(0, 0.0));
+        // The strip, not the message, says which channel.
+        assert_eq!(fader_message(5, 0.0)[0], 0xE5);
+    }
+
+    #[test]
+    fn a_knob_moves_the_level_it_finds_and_stops_at_the_ends() {
+        // One detent at the default step, from wherever the DAW says the track is.
+        assert!((volume(0.50, 1, DEFAULT_VOLUME_STEP) - 0.52).abs() < 0.0001);
+        assert!((volume(0.50, -1, DEFAULT_VOLUME_STEP) - 0.48).abs() < 0.0001);
+        // Turning a knob quickly is several detents at once.
+        assert!((volume(0.50, 10, DEFAULT_VOLUME_STEP) - 0.70).abs() < 0.0001);
+        // Fifty detents is the whole travel at the default, and no more.
+        assert_eq!(volume(0.95, 100, DEFAULT_VOLUME_STEP), 1.0);
+        assert_eq!(volume(0.05, -100, DEFAULT_VOLUME_STEP), 0.0);
+        // A step of its own is a setting too: 0.5% for the finer-handed, 5% for
+        // the impatient - twenty detents across the whole travel.
+        assert!((volume(0.50, 1, 0.005) - 0.505).abs() < 0.0001);
+        assert!((volume(0.50, 1, 0.05) - 0.55).abs() < 0.0001);
     }
 }

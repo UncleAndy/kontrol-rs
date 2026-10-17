@@ -443,7 +443,18 @@ fn main() {
                 // back to the keyboard itself on the way out, whichever handle
                 // that is by then.
                 let outcome =
-                    kontrol_rs::live::run(hid, input, page, size, quiet, time_layout, keys);
+                    kontrol_rs::live::run(
+                        hid,
+                        input,
+                        page,
+                        size,
+                        quiet,
+                        time_layout,
+                        keys,
+                        settings.knob1_volume(),
+                        settings.knob1_step(),
+                        settings.knob1_step_shift(),
+                    );
                 if let Err(message) = outcome {
                     println!("{message}");
                     exit(1);

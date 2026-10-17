@@ -220,6 +220,48 @@ mask, not the group's rights, so `ls -l` is misleading). Clear leftovers with
 `sudo setfacl -b /dev/uinput && sudo chmod 660 /dev/uinput`; the udev rule
 (`GROUP="audio"`, `MODE="0660"`) gives the group everything that is needed.
 
+## The knobs, and what the tool says back
+
+With the display taken over, the eight knobs are not on the keyboard's MIDI port at all
+(`doc/Captured_Codes.md`): every detent is in the HID report instead, two little-endian bytes per knob,
+stepping 8 per detent. `komplement` reads them there, and `-d` says each movement out loud
+(`[knobs] Knob 3: +1`).
+
+By default the **first knob moves the current track's level**: 1% of the travel per detent, applied to
+whatever level the DAW last reported for that track - never an absolute jump - and sent back as the
+message a surface's fader sends (pitch bend on the track's strip). For that to arrive, the Mackie
+Control surface's MIDI **input** in the DAW has to be our own port:
+
+```
+$ ./result/bin/komplement -m ./mappings/reaper.map -p 1740 -X auto -S page-track:med -T h:m:s:f
+Listening for Mackie Control Universal messages from Midi Through (14:0); our own port is 130:0 (KOMPLEMENTARY MCU IN input).
+For the knobs to reach the DAW, the Mackie Control surface's MIDI *input* must be KOMPLEMENTARY MCU IN input - its output stays where it is, that is the display.
+Drawing page "track" at "medium" size, ...
+```
+
+The surface's **output** is left alone: that is the port the display is written from. `knob1 = none` in
+the settings leaves the knobs read but silent, and the two measured numbers behind the reading (8 per
+detent, positions wrapping inside 1000) are the first thing to change for a keyboard that counts
+differently - `knobs.rs`.
+
+### When the DAW runs on PipeWire or JACK
+
+A DAW that takes its MIDI from the PipeWire/JACK graph cannot see an ALSA sequencer port that presents
+itself as a mere application: what gets published to that graph is decided by the port's declared type,
+and a port that says `APPLICATION` alone is left out, while the ports the DAW already knew (`Midi
+Through`, the keyboard, the interface) all present themselves as MIDI ports. Our port therefore declares
+`MIDI_GENERIC | APPLICATION | PORT`, and with that the DAW's own MIDI bridge publishes it - measured on a
+machine where nothing but the declaration had to change, and where the port then appeared in the DAW's
+device list with no bridge daemon running at all.
+
+The port also carries `READ` as well as `WRITE`: a second bridge (`a2jmidid`) publishes a JACK *output* -
+the thing a DAW reads as an input - only for a port that is readable, and a source alone is published in
+the one direction no DAW reads. Bidirectional is what a real surface is, too.
+
+Start the tool *before* the DAW, or reset the DAW's MIDI device list afterwards: it is read once, at
+start-up. In the Mackie Control surface's settings, the MIDI **input** is our port and the output stays
+where it is - that one is the display.
+
 ## Settings file
 
 `komplement` reads one settings file, and what it says is used where the command line said
@@ -240,6 +282,12 @@ One `key = value` per line, `#` starts a comment, and a value may be quoted to h
 pid = 1740
 # the port the DAW's control surface writes to (see -l and -X)
 # mcu = Midi Through
+# the first knob moves the current track's level over MCU; `none` reads them silently
+# knob1 = volume
+# how much of the full travel one detent is worth (default 0.02 = fifty detents)
+# knob1_step = 0.02
+# the same with SHIFT held on the keyboard (default 0.005 = fine adjustment)
+# knob1_step_shift = 0.005
 # mapping = /home/andy/projects/RUST/kontrol-rs/mappings/reaper.map
 # uinput = /dev/uinput
 ```

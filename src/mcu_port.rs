@@ -18,7 +18,7 @@ use crate::mcu::Decoder;
 pub use alsa::seq::{PortCap, PortType};
 
 use alsa::seq::{
-    Addr, ClientIter, Event, EventType, EvCtrl, EvNote, PortIter, PortSubscribe, Seq,
+    Addr, ClientIter, Event, EventType, EvCtrl, EvNote, MidiEvent, PortIter, PortSubscribe, Seq,
 };
 
 /// The name our own client carries, so the user can see who is listening.
@@ -30,6 +30,10 @@ pub const CLIENT_NAME: &str = "KOMPLEMENTARY MCU IN";
 /// without this a restarted DAW would never be noticed.
 pub const ANNOUNCE_CLIENT: i32 = 0;
 pub const ANNOUNCE_PORT: i32 = 1;
+
+/// Room for a short MIDI message, plus what the encoder may want to keep: these
+/// are three-byte messages, and the buffer is only ever sized, never filled.
+pub const MIDI_MESSAGE_MAX: u32 = 64;
 
 /// How much room this client asks the sequencer for, in the units ALSA uses for
 /// a pool (its own figures are small, and its defaults are sized for a trickle).
@@ -118,6 +122,20 @@ impl Port {
     /// capture tool's port, another program's input) is never a candidate.
     pub fn can_be_a_source(&self) -> bool {
         self.capability.contains(PortCap::READ) || self.capability.contains(PortCap::SUBS_READ)
+    }
+
+    /// Whether a DAW *could* write into this port - the other half of being a
+    /// surface, and the half that decides whether anything in front of the DAW
+    /// publishes us as something the DAW can read.
+    ///
+    /// `a2jmidid` creates a JACK *output* (which is what a DAW's MIDI input list
+    /// is made of) only for an ALSA port that carries `SUBS_READ`, and a JACK
+    /// *input* for one that carries `SUBS_WRITE`. A port that is a source alone
+    /// is therefore published in the one direction no DAW reads, and the surface
+    /// is invisible: measured on a machine where Reaper ran on PipeWire and
+    /// every port it could see was a bidirectional one.
+    pub fn can_be_a_destination(&self) -> bool {
+        self.capability.contains(PortCap::WRITE) || self.capability.contains(PortCap::SUBS_WRITE)
     }
 
     /// True when the wanted text names this port: an exact address, or a piece
@@ -280,9 +298,25 @@ impl McuInput {
         let port = seq
             .create_simple_port(
                 &name,
-                // A port events can be written to and subscribed as a source.
-                PortCap::WRITE | PortCap::SUBS_WRITE,
-                PortType::APPLICATION,
+                // Written to by us and subscribed as a source - and *readable*
+                // as well, which is not vanity. A bridge in front of a DAW
+                // decides what the DAW can read from an ALSA port by that
+                // port's capabilities: `a2jmidid` publishes a JACK *output*
+                // (which is what a DAW's MIDI input list is made of) only for a
+                // port that carries `SUBS_READ`, and a source alone is
+                // published as a JACK *input*, which no DAW can read as a
+                // surface. Real surfaces are bidirectional for the same reason.
+                PortCap::WRITE | PortCap::SUBS_WRITE | PortCap::READ | PortCap::SUBS_READ,
+                // `PORT` as well as `APPLICATION`, and that is a measurement
+                // rather than a preference: a DAW's MIDI device list holds the
+                // ports a bridge in front of it marks as physical, and
+                // `a2jmidid` marks a port that way only for the types
+                // `HARDWARE|PORT|SPECIFIC` - every port Reaper could see on the
+                // machine this was measured on had that mark, and the one port
+                // that did not (this one, declared `APPLICATION` alone) was the
+                // one it left out. A surface is a MIDI port to everything that
+                // looks at it, so it says so.
+                PortType::MIDI_GENERIC | PortType::APPLICATION | PortType::PORT,
             )
             .map_err(|err| err.to_string())?;
 
@@ -340,6 +374,34 @@ impl McuInput {
     /// Our own port number, so it can be found in a list of connections.
     pub fn port(&self) -> i32 {
         self.port
+    }
+
+    /// Sends one short MIDI message to whoever is subscribed to our port - the
+    /// DAW's Mackie Control *input*, when it has been pointed at us. A surface
+    /// has to answer as well as listen, which is why the port is created with
+    /// `WRITE`, and this is the same mechanism the MMC messages already use.
+    pub fn send(&self, message: &[u8]) -> Result<(), String> {
+        let mut encoder =
+            MidiEvent::new(MIDI_MESSAGE_MAX).map_err(|err| format!("no MIDI encoder: {err}"))?;
+        let (used, event) = encoder
+            .encode(message)
+            .map_err(|err| format!("{message:02x?} could not be encoded: {err}"))?;
+        if used != message.len() {
+            return Err(format!(
+                "only {used} of {} bytes are a MIDI message",
+                message.len()
+            ));
+        }
+        let Some(mut event) = event else {
+            return Err(format!("{message:02x?} is not a MIDI message"));
+        };
+        event.set_source(self.port);
+        event.set_subs();
+        event.set_direct();
+        self.seq
+            .event_output_direct(&mut event)
+            .map(|_| ())
+            .map_err(|err| format!("sending {message:02x?} failed: {err}"))
     }
 
     /// The port we listen to, as it was found.
