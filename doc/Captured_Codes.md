@@ -176,11 +176,16 @@ Through port, as they should.
   twelve characters forming a display of their own (`|000  1 52 10|` plus three
   other states in the whole capture). Purpose not identified yet; it is not a
   clock, because it changed four times in seventy seconds.
-* **There are no fader or pan controllers at all** - no CC 0..8 and no CC 16..23
-  anywhere, not even in the step where the track's volume was moved with the
-  mouse. MCU therefore cannot be asked for a fader position here, and the
-  "general information" page has to draw **levels** (the aftertouch meters)
-  rather than fader positions.
+* **Faders are pitch bend**, which is why they are easy to miss: one message per
+  channel - midi channels 1..8 for the eight strip faders and channel 9 for the
+  master - with a signed 14-bit value (`(value + 8192) / 128` is the familiar
+  0..127 position). All nine arrive as a burst every nine seconds, and that burst
+  is what the "Pitch bend x9" in every step of the report is; moving a fader
+  loosens a smooth run instead (channel 4 walked 917, 1081, 1261, 1458 ... 4243
+  while the third track's volume was moved with the mouse). So a fader position
+  *is* available - it just is not a controller message.
+* **Pan does not come through**: no CC 16..23 (the V-Pots) appear anywhere, so a
+  pan display would have to be left out or asked for separately.
 * **Nothing at all for eight seconds while the DAW was idle** (the quiet step),
   so there is no periodic heartbeat to design around: the screen has to redraw
   when something arrives, and can sit still otherwise.
