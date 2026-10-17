@@ -263,13 +263,6 @@ impl Decoder {
         &self.studio
     }
 
-    /// The DAW's own display row, digit by digit, as it was last written. The
-    /// pages read it as text through `Studio`, but a measurement needs the
-    /// values: a dot, a dark digit and a separator differ only in the number.
-    pub fn digits(&self) -> &Digits {
-        &self.digits
-    }
-
     /// The meter levels of the bank, one per channel.
     pub fn levels(&self) -> &[u8; BANK_CHANNELS] {
         &self.levels

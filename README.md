@@ -131,9 +131,8 @@ out, including on Ctrl+C; a frame the panel already shows is never sent twice, a
 back to the DAW. The whole queue is drained into the state before anything is drawn, and the panel is
 written at most twenty times a second: a DAW sends in bursts (nine pitch bends at once, hundreds of
 aftertouch events a second while playing) and drawing per message runs the sequencer's queue over -
-`ENOSPC`, which is where the first hardware run ended. On the way it echoes what the DAW says to the
-console as it changes (at most four lines a second, none while it is idle; `-q` keeps it silent) and
-prints the last state - transport, position, display, track - when the display goes back. Paging by the
+`ENOSPC`, which is where the first hardware run ended. It prints the last state - transport, position,
+display, track - when the display goes back, and `-q` keeps even that quiet. Paging by the
 two buttons, messages and the daemon itself are still to come.
 
 The position on that screen is the DAW's *own* display, decoded from its twelve seven-segment digits

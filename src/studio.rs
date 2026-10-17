@@ -288,19 +288,11 @@ impl Digits {
         self.render(0..DISPLAY_DIGITS)
     }
 
-    /// The values exactly as the DAW wrote them, digit zero first. This is what
-    /// a measurement needs: the dot bit, a dark digit and a separator are only
+    /// The values exactly as the DAW wrote them, digit zero first. What a
+    /// measurement needs: the dot bit, a dark digit and a separator are only
     /// told apart by the value itself.
     pub fn raw(&self) -> &[u8; DISPLAY_DIGITS] {
         &self.0
-    }
-
-    /// The row with every digit named, for a console line.
-    pub fn raw_text(&self) -> String {
-        (0..DISPLAY_DIGITS)
-            .map(|index| format!("{}:{}", 64 + index, self.0[index]))
-            .collect::<Vec<String>>()
-            .join(" ")
     }
 
     /// The timecode part of it: the ten rightmost digits.
