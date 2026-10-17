@@ -30,8 +30,53 @@ fn keys_of(table: &MappingTable, name: &str, layer: Layer) -> Vec<String> {
         .map(|key| match key.kind {
             KeyKind::Key => key_name(key.key).to_string(),
             KeyKind::Mmc => format!("MMC:{}", key.key),
+            KeyKind::Mcu => format!("MCU:{}", key.key),
         })
         .collect()
+}
+
+#[test]
+fn the_mcu_mapping_changes_the_surface_buttons_and_nothing_else() {
+    let plain = read("mappings/reaper.map");
+    let mcu = read("mappings/reaper-mcu.map");
+
+    // The buttons a Mackie Control surface has itself, with the notes the DAW
+    // uses for them (measured, see `src/mcu_buttons.rs`).
+    let switched = [
+        ("Play", "MCU:94"),
+        ("Stop", "MCU:93"),
+        ("Record", "MCU:95"),
+        ("Loop", "MCU:86"),
+        ("Metro", "MCU:89"),
+        ("Track", "MCU:49"),
+    ];
+    for (name, expected) in switched {
+        assert_eq!(
+            keys_of(&mcu, name, Layer::Normal),
+            vec![expected.to_string()],
+            "{name} should now be the DAW's own surface key"
+        );
+        assert_ne!(
+            keys_of(&plain, name, Layer::Normal),
+            vec![expected.to_string()],
+            "{name} was a keystroke in the plain mapping"
+        );
+        // The SHIFT layer has no MCU equivalent, so it must have been left alone.
+        assert_eq!(
+            keys_of(&plain, name, Layer::Shifted),
+            keys_of(&mcu, name, Layer::Shifted),
+            "the SHIFT layer of {name} has no MCU word and stays a keystroke"
+        );
+    }
+
+    // And a button MCU has no word for keeps its keystrokes.
+    for name in ["Undo", "Browser", "Octave Up"] {
+        assert_eq!(
+            keys_of(&plain, name, Layer::Normal),
+            keys_of(&mcu, name, Layer::Normal),
+            "{name} is not a surface function and must not have changed"
+        );
+    }
 }
 
 #[test]

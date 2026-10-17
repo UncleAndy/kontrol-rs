@@ -13,6 +13,10 @@ pub enum KeyKind {
     Key,
     /// A MIDI Machine Control command, sent through ALSA.
     Mmc,
+    /// An MCU button, sent to the DAW on the MCU port. Needs that port: the
+    /// plain keystroke mode does not open one, and there is nothing else a
+    /// button like this could be sent through.
+    Mcu,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -33,6 +37,15 @@ impl MappedKey {
         MappedKey {
             kind: KeyKind::Mmc,
             key: i32::from(command),
+        }
+    }
+
+    /// An MCU button, by the note the DAW itself uses for it - see
+    /// [`crate::mcu_buttons`], where the names and the numbers live.
+    pub fn mcu(note: u8) -> Self {
+        MappedKey {
+            kind: KeyKind::Mcu,
+            key: i32::from(note),
         }
     }
 }

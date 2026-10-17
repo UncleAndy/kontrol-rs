@@ -234,8 +234,8 @@ Control surface's MIDI **input** in the DAW has to be our own port:
 
 ```
 $ ./result/bin/komplement -m ./mappings/reaper.map -p 1740 -X auto -S page-track:med -T h:m:s:f
-Listening for Mackie Control Universal messages from Midi Through (14:0); our own port is 130:0 (KOMPLEMENTARY MCU IN input).
-For the knobs to reach the DAW, the Mackie Control surface's MIDI *input* must be KOMPLEMENTARY MCU IN input - its output stays where it is, that is the display.
+Listening for Mackie Control Universal messages from Midi Through (14:0); our own port is 130:0 (KOMPLEMENTARY MCU surface).
+For the knobs to reach the DAW, the Mackie Control surface's MIDI *input* must be KOMPLEMENTARY MCU surface - its output stays where it is, that is the display.
 Drawing page "track" at "medium" size, ...
 ```
 
@@ -375,11 +375,28 @@ One line per control, `#` starts a comment, `Shift+` selects the second layer:
 ```
 Play=Space                       # a keystroke
 Shift+Play=MMC_Play              # an MMC message (needs the ALSA port)
+Record=mcu:record                # a key of the DAW's own MCU surface (needs -X)
 4D CW=LeftCtrl,LeftShift,Right   # up to four keys, sent in this order
 ```
 
 Button and key names are matched case-insensitively; button names may be abbreviated
 (`Rotary` matches `Rotary1`), which the C tool allows too.
+
+The `mcu:` values name the buttons a Mackie Control surface has itself: `mcu:play`, `mcu:stop`,
+`mcu:record`, `mcu:loop` (MCU's "Cycle"), `mcu:click` (the metronome) and `mcu:track_left`,
+`mcu:track_right`, `mcu:bank_left`, `mcu:bank_right` - or an explicit note number, `mcu:94`. They
+go to the DAW as its own surface's keys instead of as keystrokes, so the DAW does not have to agree
+with us about a keyboard shortcut, and the button can be lit from the state the DAW sends back.
+They need the MCU port (`-X self` or `-X auto`): without one they have nowhere to go and do
+nothing, and the plain keystroke mode never opens one. The prefix is not optional - MMC's commands
+go by the same names and mean something else by them.
+
+`mappings/reaper-mcu.map` is `reaper.map` with those buttons switched over - the transport, the
+loop, the metronome and the track step - and everything else left as keystrokes, because MCU has no
+word for it: the browser, the plug-in view, the presets and the octave are not surface functions,
+and the SHIFT variants of the transport have no MCU equivalent either. The transport, loop and click
+numbers are measured; the bank and track ones are MCU's published numbers, so if a DAW disagrees
+about those, name the note explicitly.
 
 Without SHIFT the LEDs light up for every button that has a mapping in the normal layer
 (plus SHIFT and the octave buttons, which are always on). Holding SHIFT repaints them for the

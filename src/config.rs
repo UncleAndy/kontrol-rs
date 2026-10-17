@@ -20,6 +20,7 @@ use crate::buttons::{get_button_index, get_button_name};
 use crate::defs::MAPPINGS_PATH;
 use crate::keys::{key_name, key_parse};
 use crate::mapping::{Layer, MappedKey, MappingKey, MappingTable};
+use crate::mcu_buttons::{mcu_button_name, mcu_button_parse};
 use crate::mmc::{mmc_key_name, mmc_key_parse};
 
 #[derive(Debug)]
@@ -120,14 +121,25 @@ pub fn config_read(filename: &str, verbose: bool, table: &mut MappingTable) -> R
         // The name is known, so this is the list of keys.
         if byte == b'+' || byte == b',' || byte == b'\n' {
             let name = as_text(&buffer);
-            match (key_parse(&name), mmc_key_parse(&name)) {
-                (None, None) => {
+            // Three kinds, tried in this order: a key of the virtual keyboard, an
+            // MMC command, an MCU button. `mcu:` is what keeps the last two apart
+            // - they share names like "play" and "stop" and mean different things,
+            // so the MCU one is always spelled out.
+            match (
+                key_parse(&name),
+                mmc_key_parse(&name),
+                mcu_button_parse(&name),
+            ) {
+                (None, None, None) => {
                     println!("Failed to parse key `{name}` at line {line_counter}");
                 }
-                (None, Some(command)) => {
+                (None, Some(command), _) => {
                     push(&mut mapping, MappedKey::mmc(command), &name, line_counter);
                 }
-                (Some(code), _) => {
+                (None, None, Some(note)) => {
+                    push(&mut mapping, MappedKey::mcu(note), &name, line_counter);
+                }
+                (Some(code), _, _) => {
                     push(&mut mapping, MappedKey::key(code), &name, line_counter);
                 }
             }
@@ -143,6 +155,7 @@ pub fn config_read(filename: &str, verbose: bool, table: &mut MappingTable) -> R
                         .map(|key| match key.kind {
                             crate::mapping::KeyKind::Key => key_name(key.key),
                             crate::mapping::KeyKind::Mmc => mmc_key_name(key.key),
+                            crate::mapping::KeyKind::Mcu => mcu_button_name(key.key),
                         })
                         .collect();
                     println!(

@@ -402,6 +402,15 @@ pub fn run(
                                 }
                             }
                         }
+                        // Whatever the mapping wanted the DAW's surface to do goes
+                        // out through the very port the knobs write to: an MCU
+                        // button belongs to the DAW, not to the virtual keyboard,
+                        // and the DAW reads it as one of its own keys.
+                        for message in keys.take_mcu() {
+                            if let Err(reason) = input.send(&message) {
+                                eprintln!("Failed to send MCU {message:02X?}: {reason}");
+                            }
+                        }
                     }
                 }
                 Ok(_) => {}
@@ -411,6 +420,11 @@ pub fn run(
                     // usable for writes.
                     if let Some(keys) = keys.as_mut() {
                         keys.release_all(device);
+                        // …and the release of any MCU button that was held, while
+                        // the port is still there to send it.
+                        for message in keys.take_mcu() {
+                            let _ = input.send(&message);
+                        }
                     }
                     keyboard_gone = Some(message);
                 }

@@ -26,6 +26,10 @@ pub struct Outputs<'a> {
     /// `None` until the virtual keyboard exists.
     keyboard: Option<&'a mut Keyboard>,
     mmc: Option<&'a MmcPort>,
+    /// Where a mapped MCU button goes. A queue rather than a port, because the
+    /// MCU port belongs to the caller and this sink only lives for one turn:
+    /// whoever drives the engine takes the queue out afterwards and sends it.
+    mcu: Option<&'a mut Vec<[u8; 3]>>,
     /// The text of the first LED report the device refused, if any. The C tool
     /// only knows *that* something failed; keeping the reason is what tells
     /// "opened but not writable" apart from "could not be opened at all".
@@ -40,12 +44,14 @@ impl<'a> Outputs<'a> {
         leds: &'a mut Leds,
         keyboard: Option<&'a mut Keyboard>,
         mmc: Option<&'a MmcPort>,
+        mcu: Option<&'a mut Vec<[u8; 3]>>,
     ) -> Outputs<'a> {
         Outputs {
             hid,
             leds,
             keyboard,
             mmc,
+            mcu,
             failed: None,
         }
     }
@@ -72,6 +78,14 @@ impl Sink for Outputs<'_> {
             if let Err(err) = port.send_mmc(command, 0) {
                 eprintln!("Failed to send MMC: {err}");
             }
+        }
+    }
+
+    fn mcu(&mut self, note: u8, press: bool) {
+        // Only the wait: sending is the caller's, because the port outlives the
+        // turn and this sink does not.
+        if let Some(queue) = self.mcu.as_deref_mut() {
+            queue.push(crate::mcu_buttons::mcu_button_message(note, press));
         }
     }
 
@@ -104,6 +118,9 @@ pub struct Keys<'a> {
     leds: &'a mut Leds,
     keyboard: &'a mut Keyboard,
     mmc: Option<&'a MmcPort>,
+    /// What the mapping asked the DAW's surface to do, waiting to be sent on the
+    /// MCU port - which the caller owns, so the waiting happens here.
+    mcu: Vec<[u8; 3]>,
     animate: bool,
     /// Whether the start-up LED picture has been written to a device yet. After
     /// an unplug it has to be written again, on the device that is back.
@@ -123,9 +140,17 @@ impl<'a> Keys<'a> {
             leds,
             keyboard,
             mmc,
+            mcu: Vec::new(),
             animate,
             lit: false,
         }
+    }
+
+    /// Takes whatever the mapping asked the DAW's surface to do. Sent by the
+    /// caller, on the port the caller owns; empty when nothing was mapped that
+    /// way, which is the usual case.
+    pub fn take_mcu(&mut self) -> Vec<[u8; 3]> {
+        std::mem::take(&mut self.mcu)
     }
 
     /// Says that the program acts on these buttons itself - the page buttons in
@@ -142,7 +167,13 @@ impl<'a> Keys<'a> {
     /// every time the keyboard comes back, because its LEDs went with it.
     pub fn light_up(&mut self, hid: &Hid) -> Option<String> {
         let animate = self.animate && !self.lit;
-        let mut sink = Outputs::for_turn(hid, &mut *self.leds, Some(&mut *self.keyboard), self.mmc);
+        let mut sink = Outputs::for_turn(
+            hid,
+            &mut *self.leds,
+            Some(&mut *self.keyboard),
+            self.mmc,
+            Some(&mut self.mcu),
+        );
         self.engine.light_up_initial(&mut sink, animate);
         self.lit = true;
         sink.failed
@@ -152,7 +183,13 @@ impl<'a> Keys<'a> {
     /// LED report was refused is returned, and only once per report: the caller
     /// says it out loud the first time and keeps quiet afterwards.
     pub fn report(&mut self, packet: &[u8], hid: &Hid) -> Option<String> {
-        let mut sink = Outputs::for_turn(hid, &mut *self.leds, Some(&mut *self.keyboard), self.mmc);
+        let mut sink = Outputs::for_turn(
+            hid,
+            &mut *self.leds,
+            Some(&mut *self.keyboard),
+            self.mmc,
+            Some(&mut self.mcu),
+        );
         self.engine.process(packet, &mut sink);
         sink.failed
     }
@@ -161,7 +198,13 @@ impl<'a> Keys<'a> {
     /// will arrive from a keyboard that is gone, and a key left down in another
     /// program outlives the unplug.
     pub fn release_all(&mut self, hid: &Hid) {
-        let mut sink = Outputs::for_turn(hid, &mut *self.leds, Some(&mut *self.keyboard), self.mmc);
+        let mut sink = Outputs::for_turn(
+            hid,
+            &mut *self.leds,
+            Some(&mut *self.keyboard),
+            self.mmc,
+            Some(&mut self.mcu),
+        );
         self.engine.release_all(&mut sink);
     }
 

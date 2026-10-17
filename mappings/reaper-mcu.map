@@ -1,0 +1,155 @@
+# The MCU variant of reaper.map: the buttons the DAW's own surface understands
+# are sent as MCU messages instead of keystrokes, so the DAW does not have to
+# agree with us about a keyboard shortcut, and so the button can be lit from the
+# state the DAW sends back.
+#
+# It needs the MCU port: run with `-X self` (or `-X auto`). Without one those
+# buttons have nowhere to go and do nothing at all; everything else here is the
+# same as in reaper.map.
+# ---------------------------------------------------------------------------
+# Reaper mapping for the Komplete Kontrol A-series (komplement)
+#
+# Usage (Komplete Kontrol A49, USB 17cc:1740):
+#   komplement -m mappings/reaper.map -p 1740 -o /dev/uinput
+#
+# The default product ID in komplement is 1730 (A25); the A49 reports 1740,
+# check your own with: lsusb | grep -i 17cc
+#
+# Every entry maps a button on the keyboard to one or more keystrokes which
+# komplement sends through /dev/uinput. Reaper must have the keyboard focus,
+# the keys below are the stock Reaper (Main section) shortcuts.
+#
+# Buttons are named as in doc/Supported_Keys.md. "Shift+X" entries are active
+# while the SHIFT button (index 0) is held down.
+#
+# Two of the actions below have no stock Reaper shortcut and must be bound
+# once in Reaper (Actions list, shortcut "?") - the key is given here, the
+# action name is in the comment:
+#   Metro : Ctrl+Shift+M   ->  Options: Toggle metronome
+#   Solo  : Alt+Shift+S    ->  Track: Toggle solo for selected tracks
+#
+# Transport ------------------------------------------------------------------
+# Space = play/stop (same toggle as the Reaper transport wheel); use Shift+Play
+# for play/pause, Shift+Stop to jump to the project start.
+Play=mcu:play
+Stop=mcu:stop
+Record=mcu:record
+Shift+Play=LeftCtrl,Space
+Shift+Stop=W
+Shift+Record=LeftCtrl,LeftAlt,B
+
+# Editing --------------------------------------------------------------------
+# Quantize = split items at the edit cursor, Ideas = insert a marker (markers
+# are the closest thing to a scratch pad in Reaper), Shift+Ideas asks for the
+# marker name so it can double as a note.
+Undo=LeftCtrl,Z
+Shift+Undo=LeftCtrl,LeftShift,Z
+Quantize=S
+Shift+Quantize=Q
+Ideas=M
+Shift+Ideas=LeftShift,M
+
+# Grid and edit modes --------------------------------------------------------
+# Scale = snapping, Arp = ripple editing, with SHIFT the grid display and
+# auto-crossfading.
+Scale=LeftAlt,S
+Shift+Scale=LeftAlt,G
+Arp=LeftAlt,P
+Shift+Arp=LeftAlt,X
+
+# Loop and metronome ---------------------------------------------------------
+Loop=mcu:loop
+Shift+Loop=LeftCtrl,LeftAlt,L
+Metro=mcu:click
+Shift+Metro=LeftAlt,L
+
+# Tempo and project ----------------------------------------------------------
+Tempo=LeftShift,C
+Shift+Tempo=LeftAlt,Enter
+
+# Tracks ---------------------------------------------------------------------
+# Preset Up/Down walk the track list; with SHIFT they extend the track
+# selection instead of replacing it.
+#
+# Page Left and Page Right (the two buttons beside the display) are deliberately
+# *not* mapped: they belong to the screen daemon, which pages its display with
+# them (doc/display-interface.md). Mapping them here as well would both page the
+# screen and toggle mute in Reaper on one press. They used to be mapped as
+# Mute/Solo, two names inherited from the original table that this keyboard has
+# no use for - see doc/Captured_Codes.md.
+Preset Up=LeftCtrl,LeftAlt,Up
+Preset Down=LeftCtrl,LeftAlt,Down
+Shift+Preset Up=LeftCtrl,LeftAlt,LeftShift,Up
+Shift+Preset Down=LeftCtrl,LeftAlt,LeftShift,Down
+Track=mcu:track_right
+
+# Browser and plug-ins -------------------------------------------------------
+# Browser = media explorer (audition loops), Plug-In = FX chain of the
+# selected item/take, with SHIFT the FX browser and the external editor.
+Browser=LeftCtrl,LeftAlt,X
+Shift+Browser=LeftShift,F
+Plug-In=LeftShift,E
+Shift+Plug-In=LeftCtrl,LeftAlt,E
+
+# Zoom -----------------------------------------------------------------------
+# Octave Down/Up zoom the arrangement horizontally, with SHIFT they change the
+# track height.
+Octave Down=Minus
+Octave Up=Equal
+Shift+Octave Down=PageDown
+Shift+Octave Up=PageUp
+
+# Jog ------------------------------------------------------------------------
+# Turning the 4D dial moves the edit cursor, and while playing the play
+# position follows it. One click steps by grid division (Ctrl+Shift+Left/Right
+# = "Move cursor left/right to grid division"), holding SHIFT steps by a small
+# amount instead (plain Left/Right = "Move cursor left/right").
+#
+# If "fast" and "fine" feel swapped, the other way round is Ctrl+Left /
+# Ctrl+Right ("Rewind a little bit" / "Fast forward a little bit"), which seek
+# the play position directly.
+4D CCW=LeftCtrl,LeftShift,Left
+4D CW=LeftCtrl,LeftShift,Right
+Shift+4D CCW=Left
+Shift+4D CW=Right
+
+# 4D dial and the rotary touch sensors ----------------------------------------
+# The bit values behind these names were measured on an A49, see
+# doc/Captured_Codes.md. Up/Down walk the track list, Left/Right nudge the time
+# selection, 4D Button toggles the selected track's volume envelope, and the
+# 4D dial jogs the edit/play cursor - all stock Reaper shortcuts.
+#
+# (Until the payload's fifth byte was decoded these could not fire at all: the
+# scan loop stopped at button 20.)
+4D Up=LeftCtrl,LeftAlt,Up
+4D Down=LeftCtrl,LeftAlt,Down
+4D Left=Comma
+4D Right=Dot
+4D Button=V
+
+# Knobs ----------------------------------------------------------------------
+# Nothing here: the rotary touch sensors are deliberately left unmapped.
+#
+# The A49's knobs are capacitive, so a touch sensor fires on *every* turn, not
+# only when a knob is deliberately touched. Mapped, it sent a keystroke of its own
+# on top of the rotation: Reaper selected another track at the same moment the
+# knob was setting the volume of the one that was current, and in Reaper's Learn
+# dialog the keystroke was what got caught instead of the CC.
+#
+# Turning a knob is not routed through komplement at all: the knobs send MIDI CC
+# 14..21 or 22..29 (channel 1, one CC per knob, absolute values, one step per
+# detent) depending on the keyboard's own MIDI template - check which with
+# `aseqdump -p <the keyboard's port>`, see doc/Captured_Codes.md. Enable the
+# keyboard's own MIDI port as a control input in Reaper, then learn that CC to
+# "Track: Set volume for selected tracks (MIDI CC/OSC only)" and the knob drives
+# whatever track is *current*, or to "Track: Set volume for track 01..08 (MIDI
+# CC/OSC only)" for a fixed track each. Learning both numbers is the safe way
+# round a template change: Reaper keeps several MIDI bindings per action. The values
+# are the knob's own position, so a track's volume jumps to it on the first turn;
+# a knob that cannot jump would need this tool to read the CCs and send MCU volume
+# for the current track instead, which is not written yet.
+#
+# Selecting tracks lives on Preset Up/Down (Ctrl+Alt+Up/Down) and on the tracks
+# page of the display (doc/display-interface.md).
+
+# Button34..Button39 were silent on the A49 (nothing in the payload either).

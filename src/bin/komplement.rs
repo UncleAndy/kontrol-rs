@@ -622,7 +622,7 @@ held by another process (a running komplement/konfigure) or by the kernel driver
     // loop reads from and that handle is replaced when the keyboard comes back
     // after an unplug.
     {
-        let mut outputs = Outputs::for_turn(&hid, &mut leds, None, None);
+        let mut outputs = Outputs::for_turn(&hid, &mut leds, None, None, None);
         engine.light_up_initial(&mut outputs, animate);
         if let Some(reason) = outputs.failed.clone() {
             println!(
@@ -720,7 +720,7 @@ write but not read and makes the read-write open fail. Remove the ACLs with\n\
                         // does, and the display is taken over again.
                         {
                             let mut fresh =
-                                Outputs::for_turn(&opened, &mut leds, Some(&mut keyboard), mmc.as_ref());
+                                Outputs::for_turn(&opened, &mut leds, Some(&mut keyboard), mmc.as_ref(), None);
                             engine.light_up_initial(&mut fresh, false);
                         }
                         // A keyboard that comes back is in whatever mode it
@@ -756,7 +756,7 @@ write but not read and makes the read-write open fail. Remove the ACLs with\n\
 
         // Built per turn: it borrows the current handle, and that handle is a
         // different one after the keyboard was unplugged and came back.
-        let mut outputs = Outputs::for_turn(current, &mut leds, Some(&mut keyboard), mmc.as_ref());
+        let mut outputs = Outputs::for_turn(current, &mut leds, Some(&mut keyboard), mmc.as_ref(), None);
 
         let read = match current.read_timeout(&mut buffer, 2000) {
             Ok(read) => read,

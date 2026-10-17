@@ -472,7 +472,7 @@ mod tests {
         let ports = [
             port(14, 0, "Midi Through", "Midi Through Port-0"),
             port(20, 0, "Komplete Kontrol A49", "Komplete Kontrol A49 MIDI"),
-            port(128, 0, "KOMPLEMENTARY MCU IN", "input"),
+            port(128, 0, CLIENT_NAME, "surface"),
         ];
 
         let (found, source, notes) =
@@ -488,7 +488,7 @@ mod tests {
         let ports = [
             port(14, 0, "Midi Through", "Midi Through Port-0"),
             port(20, 0, "Komplete Kontrol A49", "Komplete Kontrol A49 MIDI"),
-            port(128, 0, "KOMPLEMENTARY MCU IN", "input"),
+            port(128, 0, CLIENT_NAME, "surface"),
         ];
 
         let (found, source, notes) =
@@ -515,7 +515,7 @@ mod tests {
     fn the_keyboard_and_our_own_port_are_never_candidates() {
         let ports = [
             port(20, 0, "Komplete Kontrol A49", "Komplete Kontrol A49 MIDI"),
-            port(128, 0, "KOMPLEMENTARY MCU IN", "input"),
+            port(128, 0, CLIENT_NAME, "surface"),
             port(0, 0, "System", "Timer"),
         ];
 
@@ -530,7 +530,7 @@ mod tests {
             "no candidate may be offered here: {message}"
         );
         assert!(list.contains("Komplete Kontrol A49 MIDI"), "the full list is still shown: {list}");
-        assert!(list.contains("KOMPLEMENTARY MCU IN"), "ours is shown as well: {list}");
+        assert!(list.contains(CLIENT_NAME), "ours is shown as well: {list}");
         assert!(list.contains("mcu = <name or address>"), "the pin hint stays: {list}");
     }
 

@@ -21,15 +21,15 @@ const SELECT_NOTES: u8 = 24;
 /// Transport LEDs. 93 lit right after the transport stopped and 94 while it
 /// ran, so those two are measured. 95 is the record LED next to them and is
 /// the one guess here: nothing in the capture engaged record.
-const STOP_LED: u8 = 93;
-const PLAY_LED: u8 = 94;
-const RECORD_LED: u8 = 95;
+pub const STOP_LED: u8 = 93;
+pub const PLAY_LED: u8 = 94;
+pub const RECORD_LED: u8 = 95;
 
 /// The loop and click LEDs: both lit in the step where the metronome and the
 /// loop were toggled. 86 (0x56) is the loop LED in MCU's own LED map - the map
 /// that predicted 93 and 94 correctly - which leaves 89 as the click.
-const LOOP_LED: u8 = 86;
-const CLICK_LED: u8 = 89;
+pub const LOOP_LED: u8 = 86;
+pub const CLICK_LED: u8 = 89;
 
 /// What every MCU SysEx starts with, and the command byte of an LCD write.
 const SYSEX_HEADER: [u8; 5] = [0xf0, 0x00, 0x00, 0x66, 0x14];

@@ -22,7 +22,7 @@ use alsa::seq::{
 };
 
 /// The name our own client carries, so the user can see who is listening.
-pub const CLIENT_NAME: &str = "KOMPLEMENTARY MCU IN";
+pub const CLIENT_NAME: &str = "KOMPLEMENTARY MCU";
 
 /// The name that means "the DAW writes straight into our own port": the setting
 /// `mcu = self`, or `-X self`. A word rather than a port name, because there is
@@ -325,7 +325,9 @@ impl McuInput {
             let _ = input.set_input_buffer_size(CLIENT_POOL_SIZE);
         }
 
-        let name = CString::new(format!("{CLIENT_NAME} input")).map_err(|err| err.to_string())?;
+        // The port itself, named without a direction: it carries both, and a DAW
+        // that lists it among its outputs reads "input" there as a mistake.
+        let name = CString::new(format!("{CLIENT_NAME} surface")).map_err(|err| err.to_string())?;
         let port = seq
             .create_simple_port(
                 &name,

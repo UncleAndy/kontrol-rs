@@ -19,6 +19,12 @@ pub trait Sink {
     fn keystroke(&mut self, code: u16, press: bool);
     /// An MMC message; the original only sends it on press.
     fn mmc(&mut self, command: u8);
+    /// An MCU button, pressed or released, named by the note the DAW uses for
+    /// it. The default does nothing on purpose: a sink without an MCU port - the
+    /// plain keystroke mode - has nowhere to put it and needs no change.
+    fn mcu(&mut self, note: u8, press: bool) {
+        let _ = (note, press);
+    }
     /// One LED state (indexes 0..20).
     fn led(&mut self, index: i32, state: u8);
     /// The 21 LED states are complete and should be pushed to the device.
@@ -258,6 +264,9 @@ fn emit(mapping: &MappingKey, sink: &mut impl Sink, press: bool) {
                     sink.mmc(key.key as u8);
                 }
             }
+            // Both edges, unlike MMC: an MCU button is a key of the DAW's own
+            // surface, and it is released the way it was pressed.
+            crate::mapping::KeyKind::Mcu => sink.mcu(key.key as u8, press),
         }
     }
 }
