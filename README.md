@@ -131,6 +131,13 @@ controller, or silent), twice - once with the display in MIDI mode and once with
 matching timestamps; `doc/Captured_Codes.md` holds what they have measured so far, and
 `doc/Supported_Keys.md` what is therefore mappable.
 
+`tools/capture-mcu.sh` is the same idea for the other side of the interface: it listens to the port a
+DAW's *Mackie Control Universal* surface writes to (with `aseqdump`, because a DAW's output is an ALSA
+sequencer port and `amidi` only reads rawmidi hardware) and walks through play/stop, track selection,
+mute/solo/arm, volume, click and loop, bank changes, a rename, a tempo change and a quiet period,
+stamping every event on the same clock as the step markers. Its log is what the MCU decoder will be
+written from - the opcodes are measured, never taken from documentation.
+
 The keyboard needs read/write permission for the user running `komplement`, and `/dev/uinput`
 needs write permission for sending keystrokes. There is a NixOS module for that (below); the C
 project's `README.md` and `udev/55-komplete-kontrol.rules` describe the manual route.

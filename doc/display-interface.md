@@ -104,7 +104,7 @@ While the daemon runs, it owns the display: `a0 03 04` after opening the device,
 Each step is verifiable on the panel before the next one starts:
 
 1. **done** - the model and the four pages, rendered from a canned state: the screen, the sizes and the paging can be judged with no DAW involved at all (`src/studio.rs`, `src/pages.rs`, the `page-*` states of `-S`);
-2. a capture of Reaper's MCU output, then the decoder that fills `Studio` from it - opcodes measured, not guessed;
+2. a capture of Reaper's MCU output, then the decoder that fills `Studio` from it - opcodes measured, not guessed. The capture is `tools/capture-mcu.sh` (listen to the surface's port with `aseqdump`, walk play/stop, track selection, mute/solo/arm, volume, click/loop, a bank change, a rename, a tempo change and a quiet period, each step marked on the monotonic clock); its log is the only source for the decoder, exactly as the keyboard's own protocol was measured before it was coded;
 3. the FIFO reader and the message overlay;
 4. the daemon: ownership, paging, sizes, the redraw policy, run by hand at first, as a systemd unit later.
 
