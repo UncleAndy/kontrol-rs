@@ -28,6 +28,15 @@ impl Size {
         }
     }
 
+    /// The size before this one, wrapping: for SHIFT and the page buttons.
+    pub fn previous(self) -> Size {
+        match self {
+            Size::Small => Size::Large,
+            Size::Medium => Size::Small,
+            Size::Large => Size::Medium,
+        }
+    }
+
     /// The size a `-S` name asks for after its colon, if it is one of them.
     pub fn from_name(name: &str) -> Option<Size> {
         match name {

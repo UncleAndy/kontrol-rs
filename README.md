@@ -132,8 +132,10 @@ back to the DAW. The whole queue is drained into the state before anything is dr
 written at most twenty times a second: a DAW sends in bursts (nine pitch bends at once, hundreds of
 aftertouch events a second while playing) and drawing per message runs the sequencer's queue over -
 `ENOSPC`, which is where the first hardware run ended. It prints the last state - transport, position,
-display, track - when the display goes back, and `-q` keeps even that quiet. Paging by the
-two buttons, messages and the daemon itself are still to come.
+display, track - when the display goes back, and `-q` keeps even that quiet. All four pages are
+reachable while it runs: the two page buttons turn the page and SHIFT with them changes the glyph
+size, so the small and the large layout can be judged with the DAW playing. The FIFO, the message
+overlay and the daemon itself are still to come.
 
 The position on that screen is the DAW's *own* display, decoded from its twelve seven-segment digits
 (controllers 64..75, numbered from the right, dot in bit 6): `Studio::position` is the ten-digit

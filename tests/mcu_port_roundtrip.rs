@@ -71,15 +71,22 @@ fn what_a_writer_port_sends_reaches_the_decoder() {
 
     let mut input = McuInput::open(WRITER).expect("subscribing to the writer port");
 
-    // Reading blocks, so it happens on its own thread and the test waits for an
-    // answer with a deadline: a port that never delivers must fail, not hang.
+    // The read does not wait, so it happens on its own thread - which waits, with
+    // a deadline: a port that never delivers must fail, not hang.
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         let mut decoder = Decoder::new();
         let mut delivered = 0;
         while delivered < 3 {
             match input.read_into(&mut decoder) {
-                Ok(read) => delivered += read.messages,
+                Ok(read) => {
+                    delivered += read.messages;
+                    if read.messages == 0 {
+                        // Nothing waiting is the normal answer from a
+                        // non-blocking read; waiting is the reader's job.
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                }
                 Err(message) => {
                     let _ = sender.send(Err(message));
                     return;

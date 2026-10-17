@@ -88,7 +88,9 @@ Options:
                       from. The display is taken over for the run and given back
                       on the way out; nothing is ever sent to the DAW. With
                       -S page-track:large the page and the glyph size are chosen
-                      (default: page-track at medium). Ctrl+C stops it. See
+                      (default: page-track at medium). The two page buttons turn
+                      the page while it runs, and with SHIFT held down they change
+                      the glyph size instead. Ctrl+C stops it. See
                       doc/display-interface.md.
 
  -T <format>          How to read the DAW's time display in -X. The row carries

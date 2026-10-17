@@ -171,7 +171,10 @@ impl McuInput {
     }
 
     fn open_on(chosen: &Port) -> Result<McuInput, String> {
-        let seq = Seq::open(None, None, false).map_err(|err| err.to_string())?;
+        // Non-blocking, because the reader is not allowed to wait: the caller has
+        // a keyboard to look at in between the DAW's messages, and a stopped DAW
+        // sends nothing at all. `read_into` takes the whole queue either way.
+        let seq = Seq::open(None, None, true).map_err(|err| err.to_string())?;
         seq.set_client_name(&CString::new(CLIENT_NAME).map_err(|err| err.to_string())?)
             .map_err(|err| err.to_string())?;
 
@@ -237,6 +240,15 @@ impl McuInput {
     /// DAW sends in bursts: drawing once per message is what runs this buffer
     /// over, and the caller only wants to draw once per burst anyway.
     ///
+    /// Takes everything the sequencer has waiting for us and comes straight back:
+    /// it never waits for the DAW.
+    ///
+    /// Not waiting is the point. A DAW that is stopped sends *nothing at all* (the
+    /// capture measured eight silent seconds), so a reader that waited would hide
+    /// the keyboard's own buttons for as long as the DAW had nothing to say. The
+    /// whole queue is still taken in one go before anything is drawn, which is
+    /// what keeps `ENOSPC` away.
+    ///
     /// A full queue is reported, not fatal: the sequencer says `ENOSPC`, some
     /// values did not arrive, and the state is still the DAW's - only a few of
     /// its numbers are older than they could have been.
@@ -250,14 +262,6 @@ impl McuInput {
         };
 
         loop {
-            // After the first message, take only what is already there. The
-            // `true` is what makes this ask the sequencer, not just our own
-            // buffer: without it, events still in the kernel would be missed and
-            // the drain would stop early.
-            if read.messages > 0 && self.pending(&mut input)? == 0 {
-                return Ok(read);
-            }
-
             match input.event_input() {
                 Ok(event) => {
                     if let Some(bytes) = message_bytes(&event) {
@@ -267,6 +271,9 @@ impl McuInput {
                         read.messages += 1;
                     }
                 }
+                // Nothing left: this is how a non-blocking drain ends, not an
+                // error.
+                Err(err) if err.errno() == libc::EAGAIN => return Ok(read),
                 Err(err) if err.errno() == libc::ENOSPC => {
                     read.overflowed = true;
                     if self.pending(&mut input)? == 0 {
