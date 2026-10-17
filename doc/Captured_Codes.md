@@ -69,6 +69,9 @@ is all that is needed to page a screen. The log follows the prompts exactly:
 three presses of bit 14, three of bit 15, then bit 14 and bit 15 once each, then
 nothing at all during the quiet step. **Nothing arrives over MIDI**, so these are
 HID-only, like most of the keyboard's buttons; only knob *rotation* is MIDI.
+Nothing in `mappings/reaper.map` is mapped to the sensors: they fire on every
+turn, not only on a deliberate touch, so a keystroke from one would ride along
+with each rotation and get in the way of the knob's own CC.
 
 The names are inherited, not measured: `button_names.c` (and this port after it)
 calls bits 14 and 15 Mute and Solo, but no capture had ever pressed either on an
@@ -95,9 +98,47 @@ the HID path alone.
 
 ## Rotary knobs: rotation - MIDI, not HID
 
-Rotation never shows up in the HID report: the eight knobs send absolute
-Control Change messages on channel 1, one controller each, and the ranges walk
-up and down while a knob is turned (0..74 observed, single steps):
+Rotation never shows up in the HID report **while the keyboard is in MIDI mode**, and that is the state
+the capture below was made in: the *other* pass of the earlier capture turned only the two page buttons
+with the display taken over, never a knob.
+
+**Measured: with the display taken over, rotation does arrive - and over HID.**
+`komplement -d` (MIDI mode) against `komplement -x -d` (display taken over), one knob turned in each:
+
+- in MIDI mode nothing arrives over HID, and the CCs are on the MIDI port;
+- with the display taken over the CCs stop entirely, and every detent of knob 1 shows up in the HID
+  report as **bytes 6 and 7 read as one little-endian 16-bit value, stepping by 8 per detent**:
+  `84 00 -> 8c 00 -> 94 00 -> ... -> fc 00 -> 04 01 -> 0c 01`, and back down the same way. It is an
+  absolute position, not a delta - untouched it simply sits where it was (bytes 8-9 held `df 03`
+  throughout, which is presumably knob 2's counter, untouched). The knob's touch bit is set for as long
+  as it is held (`packet[4] & 0x02`, i.e. bit 25 = Rotary1) and drops when the hand leaves - the very
+  bit that made the old keystroke mapping fire on every turn.
+
+So the panel and the knobs are not either/or: the knobs report over HID in exactly the mode the panel
+needs, which is how the NI software reads them too. MIDI mode, the CC numbers and the DAW's MIDI inputs
+are not part of that path at all.
+
+The layout, all eight knobs, one at a time, in the same capture: the position of knob N is two bytes
+little-endian at `6 + 2*(N-1)` and `7 + 2*(N-1)`, and the touch bit is button bit `25 + N` - the
+`Rotary1..Rotary8` the mapping already knows:
+
+| knob | position bytes | touch bit |
+|---|---|---|
+| Rotary1 | 6-7   | 25 (`packet[4]` 0x02) |
+| Rotary2 | 8-9   | 26 (`packet[4]` 0x04) |
+| Rotary3 | 10-11 | 27 (`packet[4]` 0x08) |
+| Rotary4 | 12-13 | 28 (`packet[4]` 0x10) |
+| Rotary5 | 14-15 | 29 (`packet[4]` 0x20) |
+| Rotary6 | 16-17 | 30 (`packet[4]` 0x40) |
+| Rotary7 | 18-19 | 31 (`packet[4]` 0x80) |
+| Rotary8 | 20-21 | 32 (`packet[5]` 0x01) |
+
+Every position is absolute, steps by 8 per detent, and wraps inside 1000: turning knob 3 up, `03e7`
+(999) came round to `0008` (8), one detent and not a thousand. `komplement -d` now says each movement
+out loud (`[knobs] Knob 3: +1`), and `src/knobs.rs` is where the reading lives.
+
+In MIDI mode they send absolute Control Change messages on channel 1, one controller each, and the
+ranges walk up and down while a knob is turned (0..74 observed, single steps):
 
 | knob | MIDI |
 |---|---|
@@ -116,6 +157,47 @@ detent), not relative, so a DAW can MIDI-learn them directly. Note that the
 values are the knob's own position: turning a knob sends its new position, so
 the parameter jumps to that position unless the DAW is told to take the value
 relatively.
+
+**The numbers are not a property of the keyboard model, and not a "different
+template" either: they are MIDI mode's two pages.** The same A49, captured later
+on the same machine, sent the same eight knobs on **CC 22..29** instead - the
+identical layout, one controller per knob, shifted by eight - and those were
+absolute as well (knob one was already at 111, stepping up by one per detent,
+knob two started at 59). Native Instruments' documentation for the MIDI mode of
+these keyboards lists both sets side by side: page 1 is CC 14..21, page 2 is
+CC 22..29, the *Page Left/Right buttons* switch between them, and the eight
+buttons send CC 112..119. So "which set is live" is a page on the keyboard, and
+nothing in the DAW or in this tool changes it.
+
+**The larger question is whether the knobs send anything at all.** The keys, the
+pitch wheel and the modulation wheel send MIDI in every mode; **MIDI mode affects
+only the display controls** - these eight knobs and eight buttons. In the
+keyboard's normal plug-in (NKS) mode the knobs drive the Komplete Kontrol or
+Kontakt instance over the host-integration path and **put nothing on the MIDI
+port**, which is exactly what a sniffer on that port shows: notes, the wheels, and
+silence from the knobs. MIDI mode is entered with SHIFT + MIDI, and the keyboard
+also enters it by itself when no Komplete Kontrol or Kontakt instance is in focus
+(the stand-alone closed, or the selected track carrying none) - and leaves it
+again as soon as one is found. "The knobs worked before" therefore means "the
+keyboard was in MIDI mode then".
+
+**And the tool can take MIDI mode away without meaning to.** The panel is taken
+over by `a0 03 04`; MIDI mode is `a0 07 00`. Measured: while the merged mode (the
+panel plus the keystrokes) ran, `aseqdump` on the keyboard's port showed notes and
+both wheels and **nothing** from the eight knobs, and the CCs came back the instant
+the tool exited - because the exit path sends `a0 07 00` and the start-up path was
+sending the takeover alone. MIDI mode has to be asserted first and the takeover
+second. Nothing about the mapping, the DAW or its MIDI inputs was involved.
+
+Ask the port, rather than trusting this table, in whatever state the keyboard is
+in right now:
+
+```sh
+aseqdump -p <the keyboard's port>      # 28:0 on the machine this was measured on
+```
+
+and if the tool ever reads the CCs, let the numbers be configured rather than
+written in.
 
 ## What is quiet
 

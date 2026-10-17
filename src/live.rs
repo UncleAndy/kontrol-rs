@@ -205,6 +205,9 @@ pub fn run(
     let mut waiting = false;
     let mut silent_overflows = 0usize;
     let mut report = [0u8; 64];
+    // The knobs' movement, read out of each report: with the display taken over
+    // they are in the report rather than on the MIDI port.
+    let mut knobs = crate::knobs::Knobs::new(crate::knobs::DEFAULT_STEP, crate::knobs::DEFAULT_MODULUS);
     // The ids of the keyboard, which is what finds it again after an unplug: the
     // handle itself is dead by then, the ids are not.
     let ids = hid.ids();
@@ -318,6 +321,13 @@ pub fn run(
             Some(device) => match device.read_timeout(&mut report, KEYBOARD_WAIT_MILLIS) {
                 Ok(length) if length > 0 => {
                     paging.pressed(&report[..length]);
+                    // The knobs first: they are read here and said out loud
+                    // before anything is drawn, so a turn is visible even when
+                    // the panel is busy.
+                    let moved = knobs.read(&report[..length]);
+                    if !quiet {
+                        crate::knobs::announce(&moved);
+                    }
                     // The same report drives the keystroke half: one device, read
                     // once, answered in both worlds - which is what the merge is.
                     if let Some(keys) = keys.as_mut() {
@@ -353,7 +363,14 @@ pub fn run(
                         Ok(device) => {
                             // The panel's own memory went with the device, so it is
                             // taken over again and the frame is written in full.
-                            let _ = device.write_raw(&[0xa0, 0x03, 0x04]);
+                            // A fresh keyboard is in whatever mode it likes, so
+                            // MIDI mode is asserted again (the knobs put their CC
+                            // on the MIDI port only while it is on) and then the
+                            // panel is taken over. The takeover alone would leave
+                            // the knobs silent for the rest of the run.
+                            for report in crate::screen::TAKEOVER {
+                                let _ = device.write_raw(report);
+                            }
                             redraw = true;
                             // Its LEDs went with it too.
                             if let Some(keys) = keys.as_mut() {

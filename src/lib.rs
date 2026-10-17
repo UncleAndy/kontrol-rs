@@ -44,6 +44,7 @@ pub mod font_medium;
 pub mod hid;
 pub mod hid_dump;
 pub mod keys;
+pub mod knobs;
 pub mod leds;
 pub mod live;
 pub mod mapping;

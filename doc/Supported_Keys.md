@@ -61,7 +61,8 @@ tool's table and were never measured on an A49.
 Tapping on the rotary dials can also be mapped if you really want (measured:
 Rotary1..Rotary7 are bits 25..31, Rotary8 is bit 32, the first bit of the
 payload's fifth byte - its rotation is not in the HID report at all, it goes out
-as MIDI CC 14..21):
+as MIDI CC 14..21, though the numbers follow the keyboard's own MIDI mode and its
+Page buttons (page 1: 14..21, page 2: 22..29) - see doc/Captured_Codes.md):
 
     Rotary1
     Rotary2
@@ -71,7 +72,23 @@ as MIDI CC 14..21):
     Rotary6
     Rotary7
     Rotary8
-    
+
+Rotary *rotation* never passes through this tool: it is MIDI from the keyboard's own port, straight to
+whatever listens there - and **only in the keyboard's MIDI mode**. With the display taken over, which is
+the mode the panel itself needs, the same rotation stops being MIDI and arrives as HID instead: bytes 6-7
+of the report as one little-endian 16-bit counter, eight per detent, absolute (doc/Captured_Codes.md) -
+which is how the NI software reads these knobs, and why the panel and the knobs are not either/or. Keys, the pitch wheel and the
+modulation wheel send MIDI in every mode; MIDI mode is what makes the eight top knobs and the eight
+buttons emit CC at all (page 1: CC 14..21, page 2: CC 22..29, switched by the Page buttons; the buttons
+are CC 112..119). In the keyboard's normal plug-in mode the knobs drive the Komplete Kontrol or Kontakt
+instance and put nothing on the MIDI port, so a sniffer sees notes and the two wheels and silence from
+the knobs. Enter MIDI mode with SHIFT + MIDI; it also switches on by itself when no Komplete Kontrol or
+Kontakt instance is in focus, and off again as soon as one is. One more thing to rule out when a knob
+looks dead: a DAW builds its device list when it starts, so a keyboard that was replugged - its ALSA
+client number changes, 20:0 became 28:0 on this machine - is missing from that list until the DAW is
+restarted. To prove a CC arrives at all, record a few seconds on a track whose input is that keyboard and
+open the item in the MIDI editor's event list - the CC is there or it is not.
+
 I discovered that the payload does include 6 additional buttons, but these cannot 
 be triggered by the Komplete Kontrol A25. I am guessing that Native Instruments use the 
 same protocol for different devices, and these might just work on keyboards that

@@ -132,7 +132,14 @@ bottom) and ignoring the size. The mixer's columns are numbered, not named - two
 read as a number on a strip where every other number means something (a track called "7 Strings" put a
 `7` next to the first track's level and the mixer looked as though it numbered its channels
 7-0-1-2-3-4-5-6) - the numbers line up with the faders and with the bank's range, and the names are on
-the tracks page, in full. How a DAW is meant to feed all
+the tracks page, in full. The current track is marked by a line under its number, on both pages that
+number channels: this one says what each track *does* - its level, its mute, its solo - and nothing
+else on it says which track is selected; on the tracks page the star in the margin says which row and
+the line says it again on the number. The line follows the bank like everything else, so with the bank
+on 9..16 it is track nine or later that carries it. The faders run the full height of the panel below
+the mute and solo marks, and there is no line under them - the row of transport and bank text that used
+to sit there is gone, because it named a bank the numbers already name and kept the bars off eight rows
+they could have used (twelve of the thirty-two instead of twenty). How a DAW is meant to feed all
 this - MCU for states, a FIFO for messages - is worked out in `doc/display-interface.md`.
 
 The decoder can be seen on the panel before any daemon exists: `komplement -X <port>` listens to the
@@ -141,7 +148,9 @@ an address (`14:0`) or a piece of the port's name (`"Midi Through"`, quoted) as 
 with the list printed when nothing matches. `-S page-track:large` picks the page and the glyph size
 (default: the track page at medium). It takes the display over for the run and gives it back on the way
 out, including on Ctrl+C; a frame the panel already shows is never sent twice, and nothing is ever sent
-back to the DAW. The whole queue is drained into the state before anything is drawn, and the panel is
+back to the DAW. Taking the display over does not cost the knobs their MIDI: MIDI mode (`a0 07 00`) is
+asserted first and the takeover (`a0 03 04`) second, because the eight knobs put their CC on the MIDI
+port only while the keyboard is in MIDI mode. The whole queue is drained into the state before anything is drawn, and the panel is
 written at most twenty times a second: a DAW sends in bursts (nine pitch bends at once, hundreds of
 aftertouch events a second while playing) and drawing per message runs the sequencer's queue over -
 `ENOSPC`, which is where the first hardware run ended. It prints the last state - transport, position,
@@ -255,6 +264,18 @@ The keyboard and the DAW's port are both *found*, not passed in:
   decides (`mcu = ...`), and failing that the ports are listed, each with what ALSA says it is
   (`(readable, subscribable, hardware)`), together with the line that pins the answer. On a machine
   where a USB interface also offers MIDI inputs this last case is the normal one: pin it once.
+
+**A loopback port that a MIDI hub also bridges becomes a feedback loop.** `Midi Through` is a kernel
+loopback: what is written into it comes straight back out, which is exactly why a control surface with no
+hardware of its own can talk to a DAW through it. But on a machine where PipeWire's MIDI bridge merges
+every port into one client - `aconnect -l` shows it as a `PipeWire-*` client connected to all the
+hardware ports in *both* directions - that loopback is also fed by everything else on the machine. The
+DAW's surface input then sees the keyboard's controller data mixed into the surface's own stream, and
+the surface's output comes back to it twice: once through ALSA and once through the bridge. Measured
+here: with `Midi Through` enabled as a *second* input in Reaper, turning a knob was detected for a while
+and then the flood of Mackie Control data hung the program. Two ways out - enable the **keyboard's own**
+port as a control input in the DAW when the knobs' CCs are wanted (a real port, no loop), or split the
+surface's read and write ports so that nothing ends up reading its own output.
 
 **A keyboard that is unplugged while the tool runs is waited for, not died of.** When a read fails,
 the device list is asked rather than hidapi - its own text for this case, `hid_error is not

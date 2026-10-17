@@ -79,8 +79,21 @@ const MARK_WIDTH: usize = 3;
 const MARK_HEIGHT: usize = 3;
 const FADER_ROW: usize = 12;
 const FADER_WIDTH: usize = 6;
-const FADER_HEIGHT: usize = 12;
-const BOTTOM_ROW: usize = 25;
+
+/// The fader runs from below the marks to the last row of the screen. The mixer
+/// used to end in a line of transport and bank text under the bars; the owner
+/// asked for that row to go and for the bars to take its rows, so the height is
+/// whatever is left below the marks rather than a number of its own.
+const FADER_HEIGHT: usize = crate::screen::PAGES * 8 - FADER_ROW;
+
+/// The row the mixer's bottom line used to sit on, kept for the test that it is
+/// the faders' row now.
+#[cfg(test)]
+const TRANSPORT_ROW: usize = 25;
+
+/// How thick the line under the current track's number is. One pixel: two would
+/// run into the mute mark, which sits on the row below the number.
+const UNDERLINE_HEIGHT: usize = 1;
 
 /// What a page shows, most important line first. A page may return more lines
 /// than any size fits - that is the point: the size decides how many are shown.
@@ -189,6 +202,24 @@ fn channel_flags(channel: &Channel) -> String {
     }
 }
 
+/// The margin in front of a track's number on the tracks page: one character,
+/// which holds the star when the track is the current one.
+const MARGIN_CHARACTERS: usize = 1;
+
+/// Characters a track's number takes on that page, right-aligned in the field
+/// after the margin: `format!("{:>2}", number)`.
+const NUMBER_CHARACTERS: usize = 2;
+
+/// How thick the line under a number is: one pixel, or two where the glyphs are
+/// drawn at double scale and a single pixel would disappear.
+fn underline_thickness(size: Size) -> usize {
+    if size == Size::Large {
+        2
+    } else {
+        1
+    }
+}
+
 /// Draws a page at a size.
 pub fn render(page: Page, studio: &Studio, size: Size) -> Frame {
     if page == Page::General {
@@ -201,6 +232,22 @@ pub fn render(page: Page, studio: &Studio, size: Size) -> Frame {
             break;
         };
         draw_line(&mut frame, line, size, row);
+
+        // The current track's number carries a line under it here as well, the
+        // way the mixer draws one: the star in the margin says which row, and
+        // the line says it again on the number itself, which is what the owner
+        // asked for. It is drawn from the number's own field, so it sits under
+        // the digits and not under the name.
+        if page == Page::Tracks && line.left.starts_with('*') {
+            screen::fill_rect(
+                &mut frame,
+                size.text_width(MARGIN_CHARACTERS),
+                row + size.glyph_height(),
+                size.text_width(MARGIN_CHARACTERS + NUMBER_CHARACTERS)
+                    - size.text_width(MARGIN_CHARACTERS),
+                underline_thickness(size),
+            );
+        }
     }
     frame
 }
@@ -254,6 +301,7 @@ pub fn mixer(studio: &Studio) -> Frame {
 
     for (index, channel) in studio.bank.iter().take(COLUMNS).enumerate() {
         let x = index * column;
+        let number = usize::from(studio.bank_first_track) + index;
 
         screen::draw_text(
             &mut frame,
@@ -261,6 +309,22 @@ pub fn mixer(studio: &Studio) -> Frame {
             LABEL_ROW,
             &clip_to(&mixer_label(studio, index), LABEL_CHARACTERS),
         );
+
+        // The current track's number is underlined. This page says what each
+        // track is *doing* - its level, its mute and solo - and nothing on it
+        // says which track is *selected*; the number is the only thing here that
+        // names a column, so the line goes under it. It follows the bank like the
+        // numbers and the faders do: with the bank on 9..16 it is track nine or
+        // later that is underlined, never the ninth column.
+        if number == usize::from(studio.track_number) {
+            screen::fill_rect(
+                &mut frame,
+                x + 2,
+                LABEL_ROW + crate::font::GLYPH_HEIGHT,
+                crate::font::text_width(LABEL_CHARACTERS),
+                UNDERLINE_HEIGHT,
+            );
+        }
 
         if channel.mute {
             screen::fill_rect(&mut frame, x + 1, MARK_ROW, MARK_WIDTH, MARK_HEIGHT);
@@ -284,26 +348,6 @@ pub fn mixer(studio: &Studio) -> Frame {
             channel.fader,
         );
     }
-
-    let bank = format!(
-        "{}-{}",
-        studio.bank_first_track,
-        usize::from(studio.bank_first_track) + COLUMNS - 1
-    );
-    let transport = format!("{} {}", studio.transport.word(), studio.transport_flags());
-    let transport_capacity = crate::font::characters_per_line(WIDTH) - bank.chars().count() - 1;
-    screen::draw_text(
-        &mut frame,
-        0,
-        BOTTOM_ROW,
-        &clip_to(transport.trim_end(), transport_capacity),
-    );
-    screen::draw_text(
-        &mut frame,
-        WIDTH - crate::font::text_width(bank.chars().count()),
-        BOTTOM_ROW,
-        &bank,
-    );
 
     frame
 }
@@ -564,6 +608,76 @@ mod tests {
         assert_eq!(mixer_label(&studio, 0), " 1");
     }
 
+    /// The mixer underlines the current track's number, and the line follows the
+    /// bank exactly as the numbers and the faders do: with the bank on 9..16 it is
+    /// track nine and later that carries it, never the ninth column.
+    #[test]
+    fn the_mixer_underlines_the_current_tracks_number() {
+        let column = WIDTH / COLUMNS;
+        let underline_row = LABEL_ROW + crate::font::GLYPH_HEIGHT;
+        let under = |frame: &Frame, index: usize| {
+            let x = index * column + 2;
+            (x..x + crate::font::text_width(LABEL_CHARACTERS))
+                .all(|x| frame[(underline_row / 8) * PAGE_BYTES + x] & (1 << (underline_row % 8)) != 0)
+        };
+
+        let mut studio = Studio::sample();
+        studio.bank_first_track = 1;
+        studio.track_number = 3;
+        let frame = render(Page::General, &studio, Size::Medium);
+        assert!(
+            under(&frame, 2),
+            "the current track's number has no line under it"
+        );
+        assert!(!under(&frame, 1), "a number that is not current has one");
+
+        studio.bank_first_track = 9;
+        studio.track_number = 12;
+        let frame = render(Page::General, &studio, Size::Medium);
+        assert!(
+            under(&frame, 3),
+            "track twelve is the third of the bank nine to sixteen"
+        );
+        assert!(
+            !under(&frame, 0),
+            "the line is under track twelve, not under the ninth column"
+        );
+
+        // A selection in another bank leaves every number alone.
+        studio.track_number = 2;
+        let frame = render(Page::General, &studio, Size::Medium);
+        assert!((0..COLUMNS).all(|index| !under(&frame, index)));
+    }
+
+    /// The tracks page underlines the current track's number too: the star in the
+    /// margin says which row, and the line says it again on the number, at every
+    /// size and under the digits rather than under the name.
+    #[test]
+    fn the_tracks_page_underlines_the_current_tracks_number() {
+        let mut studio = Studio::sample();
+        studio.track_number = 3;
+
+        for size in [Size::Small, Size::Medium, Size::Large] {
+            let frame = render(Page::Tracks, &studio, size);
+            let shown = lines_at(Page::Tracks, &studio, size);
+            let marked = shown
+                .iter()
+                .position(|line| line.left.starts_with('*'))
+                .unwrap_or_else(|| panic!("the current track is not shown at {size:?}"));
+            let row = size.line_row(marked).unwrap() + size.glyph_height();
+            let lit = |x: usize| frame[(row / 8) * PAGE_BYTES + x] & (1 << (row % 8)) != 0;
+
+            assert!(
+                (size.text_width(1)..size.text_width(3)).all(lit),
+                "the number has no line under it at {size:?}"
+            );
+            assert!(
+                !lit(size.text_width(3)),
+                "the line runs past the number at {size:?}"
+            );
+        }
+    }
+
     /// A font with no glyph for a character draws `?` instead, and that is how
     /// the selected-track marker came to look like a question mark at medium
     /// size. Everything the pages write *themselves* has to be drawable in both
@@ -724,13 +838,56 @@ mod tests {
         studio.bank[0].fader = 1.0;
         let full = mixer(&studio);
 
-        let fader_pages = (FADER_ROW / 8, (FADER_ROW + FADER_HEIGHT) / 8 + 1);
+        let fader_pages = (
+            FADER_ROW / 8,
+            ((FADER_ROW + FADER_HEIGHT) / 8 + 1).min(PAGES),
+        );
         let low_pixels = lit_pixels(&low, fader_pages.0, fader_pages.1);
         let full_pixels = lit_pixels(&full, fader_pages.0, fader_pages.1);
         assert!(
             full_pixels > low_pixels,
             "a full fader ({full_pixels}) is not bigger than an empty one ({low_pixels})"
         );
+    }
+
+    /// The faders take the rows the mixer's bottom line used to have, and there is
+    /// no line under them: the owner asked for the row of transport and bank text
+    /// to go and for the bars to grow into it.
+    #[test]
+    fn the_general_page_gives_the_faders_the_bottom_rows() {
+        let mut studio = Studio::sample();
+        studio.bank[0].fader = 1.0;
+        studio.bank[0].mute = false;
+        studio.bank[0].solo = false;
+        let frame = mixer(&studio);
+
+        let column = WIDTH / COLUMNS;
+        let lit = |x: usize, y: usize| frame[(y / 8) * PAGE_BYTES + x] & (1 << (y % 8)) != 0;
+        let fader = |index: usize| {
+            let x = index * column + (column - FADER_WIDTH) / 2;
+            x..x + FADER_WIDTH
+        };
+
+        // A full fader reaches the last row of the screen: there is no bottom edge
+        // for it to stop a row short of.
+        for y in FADER_ROW..PAGES * 8 {
+            assert!(
+                fader(0).all(|x| lit(x, y)),
+                "the first column's fader leaves row {y} empty"
+            );
+        }
+
+        // And nothing but faders is written down there any more.
+        for y in TRANSPORT_ROW..PAGES * 8 {
+            for x in 0..WIDTH {
+                if lit(x, y) {
+                    assert!(
+                        (0..COLUMNS).any(|index| fader(index).contains(&x)),
+                        "row {y} has ink at {x}, which no fader covers"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

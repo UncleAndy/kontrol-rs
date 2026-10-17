@@ -38,16 +38,21 @@ fn keys_of(table: &MappingTable, name: &str, layer: Layer) -> Vec<String> {
 fn the_reaper_mapping_parses_completely() {
     let table = read("mappings/reaper.map");
 
-    // Every row the file contains, in both layers, ends up in the table: 33
-    // plain rows plus the 27 `Shift+...` rows. The C tool prints 35 for its copy
+    // Every row the file contains, in both layers, ends up in the table: 25
+    // plain rows plus the 19 `Shift+...` rows. The C tool prints 35 for its copy
     // of this file - the two rows for Page Left and Page Right were taken out on
     // purpose, because those two buttons belong to the screen daemon that pages
     // the display with them (doc/display-interface.md), and one press should not
     // both page the screen and toggle mute in the DAW.
+    //
+    // The sixteen rotary rows went the same way: their touch sensors fire on every
+    // turn, so the chord they sent rode along with each rotation - Reaper selected
+    // another track while the knob was setting the volume of the current one, and
+    // in its Learn dialog the keystroke was caught instead of the CC.
     let normal = (0..42).filter(|index| table.is_mapped(*index, Layer::Normal)).count();
     let shifted = (0..42).filter(|index| table.is_mapped(*index, Layer::Shifted)).count();
-    assert_eq!((normal, shifted), (33, 27));
-    assert_eq!(mapped_count(&table), 33);
+    assert_eq!((normal, shifted), (25, 19));
+    assert_eq!(mapped_count(&table), 25);
 
     // The two buttons beside the display are free, in both layers.
     assert_eq!(get_button_index("Page Left"), Some(14));
@@ -65,17 +70,20 @@ fn the_reaper_mapping_parses_completely() {
     assert_eq!(keys_of(&table, "4D CW", Layer::Shifted), ["RIGHT"]);
     assert_eq!(keys_of(&table, "4D CCW", Layer::Shifted), ["LEFT"]);
 
-    // The rotary touch sensors select tracks.
-    assert_eq!(
-        keys_of(&table, "Rotary1", Layer::Normal),
-        ["LEFTCTRL", "LEFTALT", "1"]
-    );
-    assert_eq!(
-        keys_of(&table, "Rotary8", Layer::Shifted),
-        ["LEFTCTRL", "LEFTSHIFT", "LEFTALT", "8"]
-    );
+    // The rotary touch sensors are free, in both layers: they fire on every turn,
+    // so a keystroke from one arrives together with the rotation's own CC, and
+    // Reaper cannot tell the two apart while it is learning.
+    for name in ["Rotary1", "Rotary8"] {
+        let index = get_button_index(name).expect("the knob exists") as i32;
+        assert!(!table.is_mapped(index, Layer::Any), "{name} is still mapped");
+    }
+
     // Four keys is the maximum the format allows.
-    assert_eq!(keys_of(&table, "Rotary8", Layer::Shifted).len(), 4);
+    assert_eq!(
+        keys_of(&table, "Preset Up", Layer::Shifted),
+        ["LEFTCTRL", "LEFTALT", "LEFTSHIFT", "UP"]
+    );
+    assert_eq!(keys_of(&table, "Preset Up", Layer::Shifted).len(), 4);
 
     // The 4D directions and the dial button.
     assert_eq!(keys_of(&table, "4D Up", Layer::Normal), ["LEFTCTRL", "LEFTALT", "UP"]);

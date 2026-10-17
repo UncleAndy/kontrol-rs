@@ -35,6 +35,17 @@ extern "C" fn handle_interrupt(_signal: libc::c_int) {
 /// parser must agree; a test below checks that they do.
 const SHORT_OPTIONS: &str = "hv:p:m:o:c:qnsxdhalS:X:T:";
 
+/// Whether this run has to name a mapping file.
+///
+/// Only the keystroke half reads one, and a packet dump (`-d`) is not that half:
+/// it reads the keyboard and prints what it reports, which is a complete job -
+/// and it is the very tool used to find out what a control sends. Demanding a
+/// mapping there turns the command that discovers new controls into one that
+/// cannot be run until they are already known.
+fn mapping_needed(dump_packets: bool) -> bool {
+    !dump_packets
+}
+
 fn print_usage(argv0: &str) {
     println!("{}", usage_text(argv0));
 }
@@ -73,6 +84,7 @@ Options:
 
  -d                   Dump HID packets as they change (for mapping
                       the buttons and rotaries that are not handled yet).
+                      Needs no -m: such a run only reads the keyboard.
 
  -x                   Take the display over for the run (`a0 03 04`, what the
                       screen daemon will do) and give it back at the end. Use it
@@ -420,7 +432,12 @@ fn main() {
                     println!("The mapping was read, but there is no virtual keyboard to send it to.");
                 }
 
-                let _ = hid.write_raw(&[0xa0, 0x03, 0x04]);
+                // MIDI mode first, then the panel: the takeover on its own left
+                // the keyboard out of MIDI mode for the whole run and took the
+                // knobs' CC with it.
+                for report in kontrol_rs::screen::TAKEOVER {
+                    let _ = hid.write_raw(report);
+                }
                 // The handle is handed over: the loop may have to open the
                 // keyboard again after it is unplugged, and it gives the display
                 // back to the keyboard itself on the way out, whichever handle
@@ -474,10 +491,18 @@ fn main() {
         return;
     }
 
-    let Some(mapping_path) = mapping_path else {
-        print_usage(&argv0);
-        println!("ERROR: The -m <mapping> option is required.");
-        exit(1);
+    // A mapping is what the plain mode is *for* - keystrokes - so it is required
+    // unless the run is a packet dump: reading the keyboard and printing what it
+    // reports is a complete job without one, and it is the tool used to find out
+    // what a control sends in the first place.
+    let mapping_path = match mapping_path {
+        Some(path) => Some(path),
+        None if !mapping_needed(dump_packets) => None,
+        None => {
+            print_usage(&argv0);
+            println!("ERROR: The -m <mapping> option is required.");
+            exit(1);
+        }
     };
 
     // Install the interrupt handlers before touching the device.
@@ -489,17 +514,19 @@ fn main() {
 
     // Read the mapping file: this doubles as the "is the file usable?" check.
     let mut table = MappingTable::new();
-    if let Err(err) = config_read(&mapping_path, !quiet, &mut table) {
-        match err {
-            kontrol_rs::config::ConfigError::NotFound => println!(
-                "The file `{mapping_path}` could not be found in the current path, nor in the mappings folder."
-            ),
-            kontrol_rs::config::ConfigError::Io(message) => {
-                println!("The file `{mapping_path}` could not be opened: {message}")
+    if let Some(mapping_path) = mapping_path.as_deref() {
+        if let Err(err) = config_read(mapping_path, !quiet, &mut table) {
+            match err {
+                kontrol_rs::config::ConfigError::NotFound => println!(
+                    "The file `{mapping_path}` could not be found in the current path, nor in the mappings folder."
+                ),
+                kontrol_rs::config::ConfigError::Io(message) => {
+                    println!("The file `{mapping_path}` could not be opened: {message}")
+                }
             }
+            println!("The mapping file could not be read.");
+            exit(2);
         }
-        println!("The mapping file could not be read.");
-        exit(2);
     }
 
     // Open the HID device. The reason comes from hidapi/libusb, so a failure
@@ -632,6 +659,13 @@ write but not read and makes the read-write open fail. Remove the ACLs with\n\
         }
     };
     let mut dump = Dump::new();
+    // The knobs say nothing on the MIDI port while the display is taken over;
+    // their movement is in the report instead, read by the same bytes whatever
+    // mode this run is in.
+    let mut knobs = kontrol_rs::knobs::Knobs::new(
+        kontrol_rs::knobs::DEFAULT_STEP,
+        kontrol_rs::knobs::DEFAULT_MODULUS,
+    );
     let started = Instant::now();
     let mut buffer = [0u8; READ_BUFFER_SZ];
     let mut read_errors = 0;
@@ -662,7 +696,14 @@ write but not read and makes the read-write open fail. Remove the ACLs with\n\
                                 Outputs::for_turn(&opened, &mut leds, Some(&mut keyboard), mmc.as_ref());
                             engine.light_up_initial(&mut fresh, false);
                         }
-                        let _ = opened.write_raw(&[0xa0, 0x03, 0x04]);
+                        // A keyboard that comes back is in whatever mode it
+                        // likes: MIDI mode is asserted again (the knobs' CC), and
+                        // the display is taken over again only if this run took
+                        // it over in the first place.
+                        let _ = opened.write_raw(&kontrol_rs::screen::MIDI_MODE);
+                        if screen_takeover {
+                            let _ = opened.write_raw(&kontrol_rs::screen::DISABLE_LOCAL_CONTROLS);
+                        }
                         if !quiet {
                             println!(
                                 "The keyboard is back ({vid:04x}:{pid:04x}); reading it again."
@@ -732,6 +773,7 @@ write but not read and makes the read-write open fail. Remove the ACLs with\n\
         if dump_packets {
             let stamp_ms = started.elapsed().as_millis() as i64;
             dump.packet(packet, stamp_ms);
+            kontrol_rs::knobs::announce(&knobs.read(packet));
         }
 
         engine.process(packet, &mut outputs);
@@ -759,6 +801,20 @@ write but not read and makes the read-write open fail. Remove the ACLs with\n\
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_packet_dump_is_not_asked_for_a_mapping() {
+        // The run that finds out what a control sends must not require the list
+        // of what the controls do first.
+        assert!(
+            !mapping_needed(true),
+            "-d reads the keyboard and prints what it says; no mapping is involved"
+        );
+        assert!(
+            mapping_needed(false),
+            "without -d there is nothing to send but keystrokes, which come from the mapping"
+        );
+    }
 
     /// The usage text and the parser are two lists of the same options, and an
     /// option that is documented but rejected - or the other way round - is a

@@ -51,6 +51,20 @@ pub const DISABLE_LOCAL_CONTROLS: [u8; 3] = [0xa0, 0x03, 0x04];
 /// What `komplement` normally sends at start: back to "MIDI mode".
 pub const MIDI_MODE: [u8; 3] = [0xa0, 0x07, 0x00];
 
+/// Taking the panel over *without* leaving MIDI mode off.
+///
+/// The order is the whole point of this constant. `a0 07 00` puts the keyboard
+/// into MIDI mode, and MIDI mode is what makes the eight knobs put their CC on
+/// the MIDI port at all; `a0 03 04` then stops the keyboard's own display logic
+/// from drawing over ours. Sending the takeover *alone* leaves the keyboard out
+/// of MIDI mode for as long as the tool runs, so the knobs fall silent while it
+/// is up - measured exactly that way: with the merged mode running, `aseqdump`
+/// on the keyboard's port shows notes and both wheels and nothing from the
+/// knobs, and the CCs come back the moment the tool exits, which is where
+/// `a0 07 00` is sent. It is also the sequence the plain `-x` mode has always
+/// sent.
+pub const TAKEOVER: [&[u8]; 2] = [&MIDI_MODE, &DISABLE_LOCAL_CONTROLS];
+
 pub type Frame = [u8; FRAME_BYTES];
 
 /// The states `-S` knows, in the order the help lists them. The four `page-`
@@ -253,17 +267,19 @@ pub fn draw_bar(frame: &mut Frame, x: usize, row: usize, width: usize, height: u
     }
 }
 
-/// Draws a fader: an outline with the level filled from the bottom, so a channel
-/// at 0.7 stands seven tenths of the way up its travel. Like `draw_bar` it may
-/// cross a page boundary. The horizontal flavour is for parameters that read
-/// left to right, this one for levels.
+/// Draws a fader: an open-bottomed track with the level filled from the bottom, so
+/// a channel at 0.7 stands seven tenths of the way up its travel. There is no
+/// bottom edge - one would read as a line drawn under every bar, which the owner
+/// asked to be rid of, and it kept the fill a row short of the bottom as well.
+/// Like `draw_bar` it may cross a page boundary. The horizontal flavour is for
+/// parameters that read left to right, this one for levels.
 pub fn draw_vbar(frame: &mut Frame, x: usize, row: usize, width: usize, height: usize, fraction: f32) {
     if width == 0 || height == 0 || row >= PAGES * 8 || x >= WIDTH {
         return;
     }
 
     let fraction = fraction.clamp(0.0, 1.0);
-    let filled = ((height as f32 - 2.0) * fraction).round() as usize;
+    let filled = (height as f32 * fraction).round() as usize;
 
     for column in 0..width {
         let target = x + column;
@@ -279,9 +295,8 @@ pub fn draw_vbar(frame: &mut Frame, x: usize, row: usize, width: usize, height: 
 
             // 0 is the bottom row of the bar, 1 the one above it, and so on.
             let from_bottom = height - 1 - offset;
-            let edge = offset == 0 || offset == height - 1 || column == 0 || column == width - 1;
-            let inside =
-                column >= 1 && column <= width - 2 && from_bottom >= 1 && from_bottom <= filled;
+            let edge = offset == 0 || column == 0 || column == width - 1;
+            let inside = filled > 0 && from_bottom < filled && column >= 1 && column <= width - 2;
             if edge || inside {
                 frame[(y / 8) * PAGE_BYTES + target] |= 1 << (y % 8);
             }
@@ -704,6 +719,21 @@ pub fn run_probe(hid: &Hid) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn midi_mode_goes_out_before_the_display_is_taken_over() {
+        // The knobs' CC and our panel are not either/or: MIDI mode first, the
+        // takeover second. The other order (the takeover alone) is what made
+        // every knob silent for as long as the program ran.
+        assert_eq!(
+            TAKEOVER[0], MIDI_MODE,
+            "MIDI mode has to be asserted first, or the knobs stop sending CC"
+        );
+        assert_eq!(
+            TAKEOVER[1], DISABLE_LOCAL_CONTROLS,
+            "and only then the panel is taken, so the keyboard stops drawing over it"
+        );
+    }
 
     #[test]
     fn the_waiting_screen_says_so_in_two_words_and_nothing_else() {

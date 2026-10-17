@@ -120,38 +120,28 @@ Shift+4D CW=Right
 4D Button=V
 
 # Knobs ----------------------------------------------------------------------
-# The touch sensors are momentary, so a touch reads as a tap.
+# Nothing here: the rotary touch sensors are deliberately left unmapped.
 #
-# Touching a knob selects the matching track: with no SHIFT, knob N sends
-# Ctrl+Alt+N, bound in Reaper to "Track: Select track 01" .. "08".
+# The A49's knobs are capacitive, so a touch sensor fires on *every* turn, not
+# only when a knob is deliberately touched. Mapped, it sent a keystroke of its own
+# on top of the rotation: Reaper selected another track at the same moment the
+# knob was setting the volume of the one that was current, and in Reaper's Learn
+# dialog the keystroke was what got caught instead of the CC.
 #
-# With SHIFT held on the keyboard, knob N sends Ctrl+Shift+Alt+N, which is
-# meant for "Track: Select track 09" .. "16" - the second bank of eight tracks.
+# Turning a knob is not routed through komplement at all: the knobs send MIDI CC
+# 14..21 or 22..29 (channel 1, one CC per knob, absolute values, one step per
+# detent) depending on the keyboard's own MIDI template - check which with
+# `aseqdump -p <the keyboard's port>`, see doc/Captured_Codes.md. Enable the
+# keyboard's own MIDI port as a control input in Reaper, then learn that CC to
+# "Track: Set volume for selected tracks (MIDI CC/OSC only)" and the knob drives
+# whatever track is *current*, or to "Track: Set volume for track 01..08 (MIDI
+# CC/OSC only)" for a fixed track each. Learning both numbers is the safe way
+# round a template change: Reaper keeps several MIDI bindings per action. The values
+# are the knob's own position, so a track's volume jumps to it on the first turn;
+# a knob that cannot jump would need this tool to read the CCs and send MCU volume
+# for the current track instead, which is not written yet.
 #
-# Turning a knob is *not* routed through komplement: the knobs send MIDI CC
-# 14..21 (channel 1, one CC per knob, absolute values - see
-# doc/Captured_Codes.md). Reaper learns those straight to
-# "Track: Set volume for track 01..08 (MIDI CC/OSC only)", so a knob always
-# drives its own track no matter what is selected. (The alternative is to have
-# this tool read the CCs and send volume nudges instead.)
-#
-# All four combinations (Ctrl+Alt+N, Ctrl+Shift+Alt+N) are free in GNOME's
-# window manager and in Reaper's stock keymap, including the MIDI editor.
-Rotary1=LeftCtrl,LeftAlt,1
-Rotary2=LeftCtrl,LeftAlt,2
-Rotary3=LeftCtrl,LeftAlt,3
-Rotary4=LeftCtrl,LeftAlt,4
-Rotary5=LeftCtrl,LeftAlt,5
-Rotary6=LeftCtrl,LeftAlt,6
-Rotary7=LeftCtrl,LeftAlt,7
-Rotary8=LeftCtrl,LeftAlt,8
-Shift+Rotary1=LeftCtrl,LeftShift,LeftAlt,1
-Shift+Rotary2=LeftCtrl,LeftShift,LeftAlt,2
-Shift+Rotary3=LeftCtrl,LeftShift,LeftAlt,3
-Shift+Rotary4=LeftCtrl,LeftShift,LeftAlt,4
-Shift+Rotary5=LeftCtrl,LeftShift,LeftAlt,5
-Shift+Rotary6=LeftCtrl,LeftShift,LeftAlt,6
-Shift+Rotary7=LeftCtrl,LeftShift,LeftAlt,7
-Shift+Rotary8=LeftCtrl,LeftShift,LeftAlt,8
+# Selecting tracks lives on Preset Up/Down (Ctrl+Alt+Up/Down) and on the tracks
+# page of the display (doc/display-interface.md).
 
 # Button34..Button39 were silent on the A49 (nothing in the payload either).
