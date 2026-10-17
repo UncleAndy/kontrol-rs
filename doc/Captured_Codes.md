@@ -179,7 +179,20 @@ Through port, as they should.
   the capture always shows `01` before the time. Bit 6 (0x40) of the value is the
   dot of the segment, not part of the character, and a zero means the DAW turned
   that digit off - which is why a reading taken from the capture has holes in it
-  (`01 25 1  000`). Measured behaviour, all of it consistent with a position rather
+  (`01 25 1  000`).
+* **The two leftmost of those digits are the bank's first track** - measured on
+  hardware rather than in this capture, which never moved the bank: with the surface
+  showing tracks 9..16 the row read `09 000010 00`, and back on the first bank it
+  read `01`. The capture cannot say so on its own, but it does rule out the other
+  reading. The window in which the select LEDs move between two tracks of one bank
+  (their picks are strips two and three) carries **no write to controllers 74/75 at
+  all**, and the number of the *selected* track would have had to change there;
+  nothing else in MCU carries an absolute track number either, and a bank is a fixed
+  step of eight, so these two digits are what tells the screen where the surface is.
+  Before they arrive the first bank is assumed. This is what makes the tracks page
+  number past the eighth track at all - and what it did before, numbering every bank
+  from one, is what the owner saw on hardware.
+* Measured behaviour of the row, all of it consistent with a position rather
   than a clock face: nothing arrives while the DAW is stopped; while it played, the
   three rightmost digits moved fastest (they are collected in bursts, the counter's
   fine part) and one digit walked 1, 2, 3 - the beat; and the "position jump" step

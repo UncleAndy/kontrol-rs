@@ -248,12 +248,22 @@ pub struct Studio {
     /// The DAW's whole twelve-digit row as text, holes and all: what its own
     /// display shows, next to the timecode `position` holds on its own.
     pub display: String,
+    /// The two characters on the left of that row, which the protocol calls the
+    /// assignment display. Measured: it carries the **number of the bank's first
+    /// track**, and it is the only absolute track number the stream has. Empty
+    /// until the DAW writes it.
+    pub assignment: String,
     pub transport: Transport,
     pub looping: bool,
     pub click: bool,
     /// The bank MCU is showing: eight channels.
     pub bank: Vec<Channel>,
     /// The number of the bank's first channel, so the screen can say "1-8".
+    ///
+    /// It is not in the fader or name traffic at all: it comes from the two
+    /// leftmost digits of the DAW's display (`assignment`), and stays at the
+    /// first bank until the DAW writes them. That is what makes the track
+    /// numbers right once the surface moves past the eighth track.
     pub bank_first_track: u16,
 }
 
@@ -268,6 +278,11 @@ pub const DISPLAY_DIGITS: usize = 12;
 /// left of them are the assignment digits, which the protocol numbers with the
 /// same row.
 pub const TIMECODE_DIGITS: usize = 10;
+
+/// The assignment display's width in digits: the two leftmost of the row. What it
+/// carries is measured - see `Studio::assignment` - and it is what the track
+/// numbers of a bank past the first one are built from.
+pub const ASSIGNMENT_DIGITS: usize = 2;
 
 /// The DAW's row of seven-segment digits, as it was written.
 ///
@@ -307,6 +322,11 @@ impl Digits {
     /// The timecode part of it: the ten rightmost digits.
     pub fn timecode(&self) -> String {
         self.render(0..TIMECODE_DIGITS)
+    }
+
+    /// The two leftmost digits, which the protocol calls the assignment display.
+    pub fn assignment(&self) -> String {
+        self.render(DISPLAY_DIGITS - ASSIGNMENT_DIGITS..DISPLAY_DIGITS)
     }
 
     /// Renders a run of digits the way the panel reads it - rightmost digit
@@ -349,6 +369,7 @@ impl Studio {
             position: String::new(),
             position_short: String::new(),
             display: String::new(),
+            assignment: String::new(),
             transport: Transport::Stopped,
             looping: false,
             click: false,
@@ -376,6 +397,9 @@ impl Studio {
             position: "3:24:00".to_string(),
             position_short: "3:24".to_string(),
             display: "01 000324 00".to_string(),
+            // The two leftmost digits of that row, which are the bank's first
+            // track: the sample's bank starts at track one.
+            assignment: "01".to_string(),
             transport: Transport::Playing,
             looping: true,
             click: false,

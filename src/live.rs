@@ -311,9 +311,11 @@ pub fn run(
             studio.bank.first().map(|channel| channel.name.as_str()).unwrap_or("")
         );
         println!(
-            "The panel was left on page {:?} at {:?} size.",
+            "The panel was left on page {:?} at {:?} size, on tracks {}-{}.",
             paging.page.name(),
-            paging.size.name()
+            paging.size.name(),
+            studio.bank_first_track,
+            studio.bank_first_track + crate::studio::BANK_CHANNELS as u16 - 1
         );
         println!("The display is being given back to the keyboard.");
     }

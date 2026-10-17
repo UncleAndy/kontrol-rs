@@ -127,6 +127,45 @@ pub fn lines(page: Page, studio: &Studio) -> Vec<Line> {
     }
 }
 
+/// The lines a page shows at a size.
+///
+/// Only the tracks page has use for this: the bank holds eight tracks and a size
+/// has room for four, three or two rows, so the list is a *window* that follows
+/// the selection and keeps it in the middle, held inside the bank at either end
+/// (there is nothing to centre against there). Hardware showed the alternative:
+/// the list always started at the bank's first track, so selecting the fifth or
+/// sixth pushed the mark off the bottom of the panel.
+pub fn lines_at(page: Page, studio: &Studio, size: Size) -> Vec<Line> {
+    let all = lines(page, studio);
+    if page != Page::Tracks {
+        return all;
+    }
+    let rows = size.line_rows().len();
+    let first = window_start(selected_in_bank(studio), all.len(), rows);
+    all.into_iter().skip(first).take(rows).collect()
+}
+
+/// Where the selected track sits in the bank, when it is in this bank at all.
+fn selected_in_bank(studio: &Studio) -> Option<usize> {
+    let first = usize::from(studio.bank_first_track);
+    let selected = usize::from(studio.track_number).checked_sub(first)?;
+    (selected < studio.bank.len()).then_some(selected)
+}
+
+/// The first track of a window of `rows` that holds the selected one in the
+/// middle, or as close to an end of the bank as the bank allows.
+fn window_start(selected: Option<usize>, total: usize, rows: usize) -> usize {
+    if rows == 0 || total <= rows {
+        return 0;
+    }
+    let middle = rows - 1 - (rows - 1) / 2;
+    match selected {
+        Some(selected) => selected.saturating_sub(middle).min(total - rows),
+        // The selected track is in another bank: show this bank from its start.
+        None => 0,
+    }
+}
+
 /// A channel's mute/solo flags, two characters wide so the column lines up.
 fn channel_flags(channel: &Channel) -> String {
     match (channel.mute, channel.solo) {
@@ -144,7 +183,7 @@ pub fn render(page: Page, studio: &Studio, size: Size) -> Frame {
     }
 
     let mut frame = screen::off();
-    for (index, line) in lines(page, studio).iter().enumerate() {
+    for (index, line) in lines_at(page, studio, size).iter().enumerate() {
         let Some(row) = size.line_row(index) else {
             break;
         };
@@ -402,6 +441,82 @@ mod tests {
         assert_eq!(
             lines_with_content(&render(Page::Tracks, &studio, Size::Large), Size::Large),
             2
+        );
+    }
+
+    #[test]
+    fn the_tracks_page_keeps_the_selected_track_in_the_middle_of_its_window() {
+        let mut studio = Studio::sample();
+        let total = studio.bank.len();
+        for size in [Size::Small, Size::Medium, Size::Large] {
+            let rows = size.line_rows().len();
+            for number in 1..=8u16 {
+                studio.track_number = number;
+                let window = lines_at(Page::Tracks, &studio, size);
+                assert_eq!(window.len(), rows, "a full window at every size");
+
+                let marked = window
+                    .iter()
+                    .position(|line| line.left.starts_with('>'))
+                    .unwrap_or_else(|| {
+                        panic!("track {number} is selected and the window does not show it")
+                    });
+                let inside = usize::from(number) - usize::from(studio.bank_first_track);
+                let start = inside - marked;
+                // Either the window is held against an end of the bank, or the
+                // selected track is one of the two middle rows.
+                let middle = marked == (rows - 1) / 2 || marked == rows - 1 - (rows - 1) / 2;
+                assert!(
+                    start == 0 || start + rows == total || middle,
+                    "track {number}: row {marked} of {rows}, window from {start}, neither middle nor at an end"
+                );
+            }
+        }
+
+        // The ends of the bank: the window stops there instead of running past.
+        studio.track_number = 1;
+        assert!(
+            lines_at(Page::Tracks, &studio, Size::Medium)[0]
+                .left
+                .starts_with('>'),
+            "the first track is the first line when it is selected"
+        );
+        studio.track_number = 8;
+        let window = lines_at(Page::Tracks, &studio, Size::Medium);
+        assert!(
+            window[2].left.starts_with('>'),
+            "and the last track is the last line"
+        );
+    }
+
+    #[test]
+    fn a_bank_the_selection_is_not_in_shows_from_its_first_track() {
+        let mut studio = Studio::sample();
+        studio.track_number = 13; // another bank entirely
+        let window = lines_at(Page::Tracks, &studio, Size::Small);
+        assert_eq!(window.len(), 4);
+        assert!(window[0].left.contains(" 1 "), "the bank still shows from its start");
+        assert!(!window.iter().any(|line| line.left.starts_with('>')));
+    }
+
+    #[test]
+    fn the_tracks_page_numbers_from_where_the_bank_starts() {
+        let mut studio = Studio::sample();
+        // What the DAW's assignment display said on hardware: the surface is on
+        // tracks 9..16, and the twelfth track is the selected one.
+        studio.bank_first_track = 9;
+        studio.track_number = 12;
+
+        let window = lines_at(Page::Tracks, &studio, Size::Small);
+        assert!(
+            window.iter().any(|line| line.left.starts_with(">12 ")),
+            "the selected track is numbered from the bank, not from one: {:?}",
+            window.iter().map(|line| line.left.as_str()).collect::<Vec<_>>()
+        );
+        assert!(
+            window[0].left.contains("10 "),
+            "the first line of the window is track ten: {:?}",
+            window[0].left
         );
     }
 

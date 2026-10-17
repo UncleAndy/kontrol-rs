@@ -6,7 +6,7 @@
 //! places where a number is still a guess say so. Nothing here ever sends a
 //! byte back, so listening cannot disturb the DAW.
 
-use crate::studio::{Digits, BANK_CHANNELS, DISPLAY_DIGITS, Studio, Transport};
+use crate::studio::{Digits, ASSIGNMENT_DIGITS, BANK_CHANNELS, DISPLAY_DIGITS, Studio, Transport};
 use crate::timecode::TimeLayout;
 
 /// The channel strip LEDs, one block of eight notes per row. Measured:
@@ -296,6 +296,8 @@ impl Decoder {
                     self.studio.display = self.digits.text();
                     self.studio.position = self.layout.position(&self.digits);
                     self.studio.position_short = self.layout.short_position(&self.digits);
+                    self.studio.assignment = self.digits.assignment();
+                    self.take_the_bank_from_the_assignment();
                 }
             }
             Message::Name { offset, text } => {
@@ -352,6 +354,34 @@ impl Decoder {
             _ => {}
         }
         self.mirror();
+    }
+
+    /// The bank's first track, taken from the assignment display.
+    ///
+    /// The two digits on the left of the DAW's row are where the surface is, not
+    /// what is selected: the capture's window in which the select LEDs move
+    /// between two tracks of one bank carries **no write to them at all**, and the
+    /// number of the selected track would have had to change there. Measured on
+    /// hardware as well: the surface sitting on tracks 9..16 read `09 000010 00`.
+    /// That makes them the only absolute track number the stream carries, and the
+    /// reason the tracks page can number past the eighth track at all.
+    ///
+    /// Anything that is not a two-digit number - a blank pair, letters from the
+    /// protocol's own character table - leaves the bank where it was.
+    fn take_the_bank_from_the_assignment(&mut self) {
+        let assignment = self.studio.assignment.trim();
+        if assignment.len() != ASSIGNMENT_DIGITS
+            || !assignment.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return;
+        }
+        let Ok(number) = assignment.parse::<u16>() else {
+            return;
+        };
+        if number >= 1 && number != self.studio.bank_first_track {
+            self.studio.bank_first_track = number;
+            self.mirror();
+        }
     }
 
     /// The pages show one track's name, fader and flags; this puts the selected
@@ -425,6 +455,49 @@ mod tests {
         feed(&mut decoder, &[0x90, 27, 127]);
         assert_eq!(decoder.studio().track_number, 4, "select of strip four");
         assert!(decoder.studio().armed, "arm of that strip follows the select");
+    }
+
+    #[test]
+    fn the_assignment_digits_say_which_bank_the_surface_is_on() {
+        let mut decoder = Decoder::new();
+        // Measured on hardware: with the surface showing tracks 9..16 the two
+        // leftmost characters read "09". Controller 75 is the leftmost digit and
+        // 74 the one after it, so the pair arrives right to left like the rest.
+        feed(&mut decoder, &[0xb0, 75, 48, 74, 57]);
+        assert_eq!(decoder.studio().assignment, "09");
+        assert!(decoder.studio().display.starts_with("09"));
+        assert_eq!(
+            decoder.studio().bank_first_track,
+            9,
+            "the two digits are the bank's first track, not the selection"
+        );
+
+        // The eighth strip of that bank is track sixteen, not eight.
+        feed(&mut decoder, &[0x90, 31, 127]);
+        assert_eq!(decoder.studio().track_number, 16);
+
+        // And back to the first bank: the numbers follow it down again.
+        feed(&mut decoder, &[0xb0, 75, 48, 74, 49]);
+        assert_eq!(decoder.studio().bank_first_track, 1);
+        assert_eq!(decoder.studio().track_number, 8);
+    }
+
+    #[test]
+    fn a_pair_that_is_not_a_number_leaves_the_bank_alone() {
+        let mut decoder = Decoder::new();
+        feed(&mut decoder, &[0xb0, 75, 48, 74, 57]);
+        assert_eq!(decoder.studio().bank_first_track, 9);
+
+        // Zeros, a blank pair and letters from the protocol's own table: none of
+        // them is a bank.
+        for pair in [[48u8, 48u8], [0u8, 0u8], [2u8, 20u8]] {
+            feed(&mut decoder, &[0xb0, 75, pair[0], 74, pair[1]]);
+            assert_eq!(
+                decoder.studio().bank_first_track,
+                9,
+                "a pair of {pair:?} is not a bank number"
+            );
+        }
     }
 
     #[test]

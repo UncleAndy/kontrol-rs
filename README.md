@@ -139,7 +139,10 @@ overlay and the daemon itself are still to come.
 
 The position on that screen is the DAW's *own* display, decoded from its twelve seven-segment digits
 (controllers 64..75, numbered from the right, dot in bit 6): `Studio::position` is the ten-digit
-timecode and `Studio::display` the whole row, holes included. Its meaning depends on the format the DAW
+timecode and `Studio::display` the whole row, holes included. **The two leftmost of those digits are
+the number of the bank's first track** (`Studio::assignment`): measured on hardware, with the surface
+on tracks 9..16 they read `09`, and nothing else in MCU carries an absolute track number at all - which
+is why the tracks page can keep counting past the eighth track. Its meaning depends on the format the DAW
 was told to send, and the row does not carry that format anywhere - so `-T h:m:s:f` names it
 (`src/timecode.rs`; measured against the DAW's own transport, where `000324 00` is `00:03:24:00`), and
 the default `-T written` draws the digits exactly as they arrived. Leading zeros are left out, so the
