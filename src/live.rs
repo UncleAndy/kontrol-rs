@@ -358,7 +358,7 @@ pub fn run(
                         .iter()
                         .any(|binding| binding.action != crate::knobs::KnobAction::None);
                     if any_binding && moved.iter().any(|detents| *detents != 0) {
-                        let (strip, fader, pan, master) = {
+                        let (strip, fader, master) = {
                             let studio = decoder.studio();
                             let strip = studio
                                 .track_number
@@ -367,7 +367,6 @@ pub fn run(
                             (
                                 strip,
                                 studio.bank.get(strip).map(|channel| channel.fader),
-                                studio.bank.get(strip).map(|channel| channel.pan),
                                 studio.master_fader,
                             )
                         };
@@ -394,13 +393,10 @@ pub fn run(
                                     // the bank shows, so it has no strip to move.
                                     None => continue,
                                 },
-                                crate::knobs::KnobAction::Pan => match pan {
-                                    Some(pan) => crate::knobs::pan_message(
-                                        strip as u8,
-                                        crate::knobs::pan(pan, detents, step),
-                                    ),
-                                    None => continue,
-                                },
+                                crate::knobs::KnobAction::Pan => crate::knobs::pan_relative_message(
+                                    strip as u8,
+                                    crate::knobs::pan_units(detents, step),
+                                ),
                                 crate::knobs::KnobAction::Master => crate::knobs::fader_message(
                                     crate::knobs::MASTER_CHANNEL,
                                     crate::knobs::volume(master, detents, step),

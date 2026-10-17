@@ -163,20 +163,43 @@ pub fn pan_from_dot(dot: u8) -> f32 {
     (0.5 + steps / 2.0).clamp(0.0, 1.0)
 }
 
-/// Pan the way a surface moves it: a controller on the strip's own CC number,
-/// 0 hard left, 64 the middle, 127 hard right.
-pub fn pan_message(strip: u8, fraction: f32) -> [u8; 3] {
-    let value = (fraction.clamp(0.0, 1.0) * 127.0).round() as u8;
-    [0xB0, PAN_CC_FIRST + (strip & 0x07), value]
+/// The value a V-Pot sends for "no movement", and the bit that turns a step
+/// around. Measured on Reaper, from two turns of one knob: a step with this bit
+/// clear moves the pan right, with it set moves it left, and the six bits below
+/// it are how far. The earlier reading - that the value was a signed offset
+/// around 0x40 - was wrong in exactly the way this pair of observations shows.
+pub const PAN_NEUTRAL: u8 = 0x00;
+/// The bit that makes a step a leftward one.
+pub const PAN_LEFT_BIT: u8 = 0x40;
+/// How far one turn may ask a V-Pot to move: the six bits below the leftward
+/// bit are the distance.
+pub const PAN_STEPS_MAX: i32 = 63;
+
+/// How many V-Pot steps a turn is worth. The setting is a share of the travel,
+/// and the travel is 128 steps wide, so 0.01 comes to one step per turn.
+pub fn pan_units(detents: i32, step: f32) -> i32 {
+    if detents == 0 {
+        return 0;
+    }
+    let wanted = (detents as f32 * step * 127.0).round() as i32;
+    // A turn asks for at least one step, in the direction it turned: a turn
+    // that asked for nothing would be a knob that had stopped working, which is
+    // exactly how the position form of this message failed on hardware.
+    let wanted = if wanted == 0 { detents.signum() } else { wanted };
+    wanted.clamp(-PAN_STEPS_MAX, PAN_STEPS_MAX)
 }
 
-/// Pan moved by a turn of the knob - the one control that counts the other way
-/// round. The DAW's V-Pot scale runs opposite to our detents (felt on the
-/// keyboard, not inferred from the protocol), so a turn to the right asks for a
-/// smaller controller value. Levels are *not* inverted: the fader and the V-Pot
-/// are different messages, and the fader's direction was right as it was.
-pub fn pan(current: f32, detents: i32, step: f32) -> f32 {
-    volume(current, -detents, step)
+/// A V-Pot's own message: the strip's controller number and the movement, the
+/// way a surface sends it - a step or steps either way, or the neutral value
+/// for a turn that is worth none.
+pub fn pan_relative_message(strip: u8, units: i32) -> [u8; 3] {
+    let units = units.clamp(-PAN_STEPS_MAX, PAN_STEPS_MAX);
+    let value = if units >= 0 {
+        units as u8
+    } else {
+        PAN_LEFT_BIT + (-units) as u8
+    };
+    [0xB0, PAN_CC_FIRST + (strip & 0x07), value]
 }
 
 /// What a knob does.
@@ -366,14 +389,28 @@ mod tests {
 
     #[test]
     fn pan_and_the_master_are_the_messages_the_surface_itself_sends() {
-        // A V-Pot: the strip's own controller number, the pan on its own scale,
-        // 64 in the middle.
-        assert_eq!(pan_message(0, 0.5), [0xB0, PAN_CC_FIRST, 64]);
-        assert_eq!(pan_message(3, 0.0), [0xB0, PAN_CC_FIRST + 3, 0]);
-        assert_eq!(pan_message(3, 1.0), [0xB0, PAN_CC_FIRST + 3, 127]);
-        // Out of range is clamped rather than wrapped, as with the faders.
-        assert_eq!(pan_message(0, 2.0), pan_message(0, 1.0));
-        assert_eq!(pan_message(0, -1.0), pan_message(0, 0.0));
+        // The strip's own controller number, and the movement as a relative
+        // value the V-Pot's own seven bits carry.
+        assert_eq!(pan_relative_message(0, 0), [0xB0, PAN_CC_FIRST, PAN_NEUTRAL]);
+        assert_eq!(pan_relative_message(3, 3), [0xB0, PAN_CC_FIRST + 3, 3]);
+        assert_eq!(
+            pan_relative_message(3, -3),
+            [0xB0, PAN_CC_FIRST + 3, PAN_LEFT_BIT + 3],
+            "a leftward step carries the bit and the distance"
+        );
+        // A leftward turn of one is one step left, not sixty-three right: this
+        // pair is what measured the encoding, one turn each way on hardware.
+        assert_eq!(pan_relative_message(0, -1), [0xB0, PAN_CC_FIRST, 0x41]);
+        assert_eq!(pan_relative_message(0, 1), [0xB0, PAN_CC_FIRST, 0x01]);
+        // More than the six bits can carry is clamped, not wrapped.
+        assert_eq!(pan_relative_message(0, 500), pan_relative_message(0, PAN_STEPS_MAX));
+        assert_eq!(pan_relative_message(0, -500), pan_relative_message(0, -PAN_STEPS_MAX));
+        // A turn is never nothing: the setting scales it, and one too small to
+        // round up still arrives as a step in the direction the knob went.
+        assert_eq!(pan_units(1, DEFAULT_PAN_STEP), 1);
+        assert_eq!(pan_units(-1, DEFAULT_PAN_STEP), -1);
+        assert_eq!(pan_units(0, 0.5), 0);
+        assert_eq!(pan_units(1, 0.0001), 1, "a turn that rounds to nothing still turns");
         // The master is the ninth fader: the same message as a strip's, on a
         // channel the strips do not use.
         assert_eq!(fader_message(MASTER_CHANNEL, 0.5)[0], 0xE8);
@@ -383,11 +420,7 @@ mod tests {
         );
         // A knob bound to pan gets the V-Pot's scale, not the fader's.
         assert!(DEFAULT_PAN_STEP > 0.0 && DEFAULT_PAN_STEP <= 1.0);
-        // A pan is the one control that counts the other way round: a turn up
-        // moves it down, and the levels are left alone.
-        assert!(pan(0.5, 1, DEFAULT_PAN_STEP) < 0.5, "a turn up moves the pan down");
-        assert!(pan(0.5, -1, DEFAULT_PAN_STEP) > 0.5, "and a turn down moves it up");
-        // And it is the finer of the two by default: a pan is set by ear.
+        // The pan's detent is the finer one by default: a pan is set by ear.
         assert!(
             DEFAULT_PAN_STEP < DEFAULT_VOLUME_STEP,
             "pan {DEFAULT_PAN_STEP} should move by less per detent than a level {DEFAULT_VOLUME_STEP}"

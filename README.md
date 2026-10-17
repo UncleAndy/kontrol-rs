@@ -229,17 +229,22 @@ stays quiet, and the panel is where the state is read.
 
 By default the **first knob moves the current track's level**, the **second its pan** and the
 **eighth the master level** - and the settings can give any knob a job of its own: `knob3 = pan`,
-`knob1 = none` leaves one read but silent. A pan counts the other way round from the levels (the
-V-Pot's scale runs opposite to our detents) and, because the DAW never sends a pan back - only the
-ring around its V-Pot, twelve dots wide - the tool starts from what that ring says and corrects
-itself from the controller value the moment the DAW sends one. Its detent is 0.01: below 1/127 the
-step falls between the controller's own values and half the turns are swallowed.
+`knob1 = none` leaves one read but silent. A pan is the one control a V-Pot drives *relatively*:
+Reaper takes a step either way for it and not a position (measured twice, one turn each way: a step of
+one with the 0x40 bit clear moves the pan right, with that bit set moves it left, and the six bits
+below carry the distance - so 0x01 is one step right and 0x41 is one step left), so the knob sends
+turns, the DAW adds them to the pan a track already has, and nothing has to be guessed. Its detent is
+0.01 of the travel, which comes to about one step of the controller per turn. The ring above the V-Pot
+is still read - it is the DAW's own word for where the pan stands - but the panel is the only thing
+that uses it.
 
-Every one of them is **relative to what the DAW last reported** - the level or the pan the knob finds
-is where it starts from, never an absolute jump - and each is sent as the message a surface's own
-control sends: a fader as pitch bend on the track's strip, a pan as that strip's V-Pot controller, the
-master as the ninth fader. For any of that to arrive, the Mackie Control surface's MIDI **input** in
-the DAW has to be our own port:
+A level is **relative to what the DAW last reported** - the level the knob finds is where it starts
+from, never an absolute jump - and it is sent as the message a surface's own fader sends, pitch bend
+on the track's strip, with the master on the ninth. The pan needs none of that: its message carries
+the turn itself.
+
+For any of that to arrive, the Mackie Control surface's MIDI **input** in the DAW has to be our own
+port:
 
 ```
 $ ./result/bin/komplement -m ./mappings/reaper.map -p 1740 -X auto -S page-track:med -T h:m:s:f
