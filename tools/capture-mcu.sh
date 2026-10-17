@@ -126,15 +126,130 @@ echo "== rawmidi hardware (amidi); a 'Virtual MIDI' device here works with eithe
 amidi -l 2>&1 | sed -n '1,12p'
 echo
 
+# A numbered shortlist of the ports a DAW output could be, from `aconnect -l`:
+# `client:port` plus the names ALSA gives them, and a mark on the ports the DAW
+# currently writes to (that is the "Connecting To:" line under its own port).
+# Ports whose name mentions a DAW or a virtual port come first, because that is
+# what this capture is aimed at; System (the timer and the announce port) is out.
+candidates() {
+    aconnect -l 2>/dev/null | awk '
+        # Only a client that looks like a DAW decides the mark: with PipeWire in
+        # the picture every port is connected to something, and a mark on the
+        # PipeWire bridge would point at nothing useful.
+        function daw(nm) { return tolower(nm) ~ /reaper|ardour|bitwig|cubase|mixbus|nuendo|harrison/ }
+
+        /^client [0-9]+:/ {
+            client = $2; sub(/:$/, "", client)
+            name = $0
+            sub(/^client [0-9]+: */, "", name); sub(/ *\[type=.*$/, "", name); sub(/ *$/, "", name)
+            next
+        }
+        /^[[:space:]]+[0-9]+ +/ {
+            port = $1
+            pname = $0
+            sub(/^[[:space:]]+[0-9]+ +/, "", pname); sub(/[[:space:]]+$/, "", pname)
+            if (pname == "") pname = name
+            key = client ":" port
+            seen[key] = 1; client_of[key] = name; port_of[key] = pname
+            next
+        }
+        /Connecting To:/ {
+            # "Connecting To: 14:0[real:1], 16:0[real:1]" - several destinations
+            # per line, each with a bus annotation, so split and strip both.
+            if (!daw(name)) next
+            line = $0
+            sub(/.*Connecting To:[[:space:]]*/, "", line)
+            count = split(line, parts, ",")
+            for (i = 1; i <= count; i++) {
+                dest = parts[i]
+                gsub(/[[:space:]]/, "", dest)
+                sub(/\[.*$/, "", dest)
+                if (dest != "") written[dest] = 1
+            }
+            next
+        }
+        END {
+            for (key in seen) {
+                mark = ""
+                if (key in written)                mark = "the DAW writes here"
+                else if (daw(client_of[key]))      mark = "the DAW itself - same traffic"
+                printf "%s\t%s\t%s\t%s\n", key, client_of[key], port_of[key], mark
+            }
+        }
+    ' | tr -d "'" | grep -v '^0:' |
+        awk -F'\t' '{
+            # Strip the padding aconnect puts around names (the quotes are gone by
+            # now, so a trailing-space strip has to happen after that).
+            for (i = 1; i <= NF; i++) sub(/[[:space:]]+$/, "", $i)
+            # The DAW first, then anything virtual, then everything else.
+            name = tolower($2 $3)
+            if (name ~ /reaper/)               rank = 0
+            else if (name ~ /virtual|through/) rank = 1
+            else                               rank = 2
+            printf "%d\t%s\t%s\t%s\t%s\n", rank, $1, $2, $3, $4
+        }' | sort -s -k1,1n | cut -f2-
+}
+
+# Asks for the port: a number from the shortlist, a `client:port` or a `hw:N,0,0`
+# node, or a fragment of a name. Prints the choice, or nothing when there is none.
+#
+# Everything except that one line goes to stderr on purpose: this function is
+# called in a command substitution (`PORT="$(choose_port)"`), so its stdout is the
+# answer and nothing else. Print the list there and it lands in the variable
+# instead of the terminal - the caller then waits for input that was never asked
+# for, which reads as "the script did nothing".
+choose_port() {
+    local list count port name pname mark choice picked
+    list="$(candidates)"
+
+    if [ -z "$list" ]; then
+        echo "!! ALSA lists no sequencer ports at all - is snd-seq loaded, and is the DAW running?" >&2
+        return 1
+    fi
+
+    echo "-- which port should I listen to? Ports ALSA can offer:" >&2
+    count=0
+    while IFS=$'\t' read -r port name pname mark; do
+        count=$((count + 1))
+        printf '   %2d) %-8s %-28s (%s)%s\n' "$count" "$port" "$pname" "$name" \
+            "${mark:+   <== $mark}" >&2
+    done <<< "$list"
+    cat >&2 <<'HINTS'
+   Pick the line marked "the DAW writes here" if there is one - that is the device
+   the control surface outputs to. The line marked "the DAW itself" carries the
+   same traffic, so it works too. A rawmidi node from the amidi list above also
+   works: type it as hw:N,0,0.
+   Nothing that looks like a DAW output? Give the DAW a virtual port to write to -
+   "sudo modprobe snd-virmidi" makes "Virtual MIDI 1..4" appear here and in Reaper's
+   MIDI Devices list - and aim the control surface at that.
+HINTS
+    printf "   number, client:port, hw:N,0,0 or a name fragment> " >&2
+    if ! read -r choice; then
+        echo "!! nothing to read: stdin is not a terminal - pass the port as the second argument" >&2
+        return 1
+    fi
+
+    case "$choice" in
+        "")            return 1 ;;
+        hw:*|plughw:*) picked="$choice" ;;
+        *:*)           picked="$choice" ;;
+        *[!0-9]*)      picked="$(printf '%s\n' "$list" | awk -F'\t' -v pat="$choice" \
+                                  'index(tolower($0), tolower(pat)) { print $1; exit }')" ;;
+        *)             picked="$(printf '%s\n' "$list" | awk -F'\t' -v want="$choice" \
+                                  'NR == want { print $1 }')" ;;
+    esac
+
+    if [ -z "$picked" ]; then
+        echo "!! could not make a port of '$choice'" >&2
+        return 1
+    fi
+
+    printf '%s\n' "$picked"
+}
+
 PORT="$PORT_ARG"
 if [ -z "$PORT" ]; then
-    echo "-- which port should I listen to?"
-    echo "   A DAW output is a sequencer port: pass it as client:port, e.g. 128:0."
-    echo "   A rawmidi node instead: pass it as hw:N,0,0."
-    echo "   (In Reaper: Preferences -> Control/OSC/Web -> Add -> Mackie Control"
-    echo "    Universal, and pick that port as its MIDI output.)"
-    printf "   port> "
-    read -r PORT || true
+    PORT="$(choose_port)" || exit 1
 fi
 
 case "$PORT" in

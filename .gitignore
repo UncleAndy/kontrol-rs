@@ -31,3 +31,4 @@ rustc-ice-*.txt
 kk-capture-*/
 kk-screen-buttons-*/
 kk-takeover/
+kk-mcu-*/

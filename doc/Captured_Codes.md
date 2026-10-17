@@ -141,3 +141,48 @@ did not answer on this keyboard, consistent with the remark in
 Still open: the knobs' rotation. It is MIDI only, so either MIDI-learn the
 parameters in the DAW from the keyboard's MIDI input, or teach the tool to read
 MIDI input (it currently only creates an output port) and translate CC 14..21.
+
+## What Reaper sends over MCU (measured)
+
+`tools/capture-mcu.sh` recorded a Mackie Control Universal surface in Reaper
+writing into `Midi Through`: 33920 events in 70 seconds, kept in
+`kk-mcu-20261017-032907/` and summarised by `tools/mcu-report.awk`. The DAW's
+output had to be listened to with `aseqdump` (a sequencer port - `amidi` sees
+rawmidi hardware only); the events arrive with source `14:0`, i.e. out of the
+Through port, as they should.
+
+* **Track names are LCD writes**: `F0 00 00 66 14 12 <offset> <7 ASCII> F7`.
+  The offsets are `0x00, 0x07, 0x0E, 0x15, 0x1C, 0x23, 0x2A, 0x31` - eight
+  fields of exactly seven characters, one per channel of the bank. The capture
+  contains `0 Lead`, `1 Back`, `2 Drum`, `3 Bass`, `4 Guit`, `5 Keyb`, `6 Perc`:
+  the number Reaper prepends, then the name, padded with spaces.
+* **A longer write at offset 0x00** (119 bytes, 17 times) carries Reaper's own
+  status line - `REAPER! Initializing... Please wait...` - so the same command
+  does a whole line and a single field, and the length says which.
+* **Channel LEDs are notes**, one per channel, in four blocks: 0..7 record-arm,
+  8..15 solo, 16..23 mute, 24..31 select. Measured as transitions: selecting the
+  first track turns note 24 on, muting turns note 16 or 17 on, and so on; lit is
+  note on with velocity 127, dark is note off.
+* **Meters are channel aftertouch** (0xD0), values 0..127, one stream per
+  channel and by far the most traffic in the capture (9800 events in the busiest
+  step). A level display is built from these.
+* **Transport and utility LEDs** are notes from 90..101 and 113..115 (94 = play,
+  93 = stop, 95 = record appeared in the transitions), plus 74..78 and 86/89.
+* **SysEx command 0x20** arrives eight times in a row as `00 03` .. `07 03`: one
+  per channel, the same value every time. Not yet identified.
+* **Controllers 48..55** (0x30..0x37) appear 19 times each with constant values -
+  V-Pot ring modes, refreshed rather than changed.
+* **Controllers 64..75** carry ASCII codes (48 = '0', 57 = '9', 0 = blank):
+  twelve characters forming a display of their own (`|000  1 52 10|` plus three
+  other states in the whole capture). Purpose not identified yet; it is not a
+  clock, because it changed four times in seventy seconds.
+* **There are no fader or pan controllers at all** - no CC 0..8 and no CC 16..23
+  anywhere, not even in the step where the track's volume was moved with the
+  mouse. MCU therefore cannot be asked for a fader position here, and the
+  "general information" page has to draw **levels** (the aftertouch meters)
+  rather than fader positions.
+* **Nothing at all for eight seconds while the DAW was idle** (the quiet step),
+  so there is no periodic heartbeat to design around: the screen has to redraw
+  when something arrives, and can sit still otherwise.
+* A few pitch bend messages (9..130 per step) come along - too few to belong to
+  the surface's own protocol. Not yet accounted for.
