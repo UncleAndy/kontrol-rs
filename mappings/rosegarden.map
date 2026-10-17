@@ -12,9 +12,9 @@ Record=MMC_Record_Strobe
 Loop=LeftCtrl+L
 
 # Track stuff
-Shift+Mute=U
+Shift+Page Left=U
 Shift+Record=R
-Shift+Solo=S
+Shift+Page Right=S
 
 # Track navigation
 4D Up=Up

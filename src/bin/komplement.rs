@@ -27,10 +27,18 @@ extern "C" fn handle_interrupt(_signal: libc::c_int) {
     ABORTED.store(true, Ordering::SeqCst);
 }
 
+/// The options the parser accepts, in `getopt` notation. The usage text and the
+/// parser must agree; a test below checks that they do.
+const SHORT_OPTIONS: &str = "hv:p:m:o:qnsxdhalS:";
+
 fn print_usage(argv0: &str) {
+    println!("{}", usage_text(argv0));
+}
+
+fn usage_text(argv0: &str) -> String {
     // Written flush left on purpose: a line continuation (`\` at the end of a
     // source line) would strip the leading spaces that indent the options.
-    println!(
+    format!(
         "{KOMPLEMENT_NAME} v{KOMPLEMENT_VERSION} by @hvangalen@mastodon.nl
 
 This utility converts the non-MIDI keys on the Komplete Kontrol A-series keyboards
@@ -39,6 +47,8 @@ to keyboard presses, so they will become usable in your software of choice.
 Usage: {argv0} <options>
 
 Options:
+ -h                   Print this help and exit.
+
  -o /path/to/uinput   The path to uinput device file ({DEFAULT_UINPUT_PATH}).
  -m /path/to/mapping  The path to mapping file (required to be useful).
  -a                   Do not create ALSA MIDI output port for MMC messages.
@@ -48,6 +58,11 @@ Options:
 
  -d                   Dump HID packets as they change (for mapping
                       the buttons and rotaries that are not handled yet).
+
+ -x                   Take the display over for the run (`a0 03 04`, what the
+                      screen daemon will do) and give it back at the end. Use it
+                      with -d to see what a control reports while the display is
+                      ours rather than Native Instruments'.
 
  -l                   List the HID devices the system exposes and exit
                       (works without the keyboard attached).
@@ -68,7 +83,7 @@ Advanced options:
  -v <vendorId>        USB vendor ID (in case you want to try other hardware).
 
 {RISK_DISCLAIMER}"
-    );
+    )
 }
 
 /// Where the engine's decisions are actually carried out.
@@ -138,6 +153,7 @@ fn main() {
     let mut quiet = false;
     let mut midi_controller = true;
     let mut dump_packets = false;
+    let mut screen_takeover = false;
     let mut uinput_path = DEFAULT_UINPUT_PATH.to_string();
     let mut mapping_path: Option<String> = None;
     let mut list_devices = false;
@@ -147,7 +163,7 @@ fn main() {
 
     let mut options = GetOpt::new(
         arguments.iter().map(String::as_str).collect(),
-        "v:p:m:o:qnhdalS:",
+        SHORT_OPTIONS,
     );
     while let Some((option, value)) = options.next_option() {
         parsed_options += 1;
@@ -162,6 +178,7 @@ fn main() {
             'o' => uinput_path = value,
             'q' => quiet = true,
             'd' => dump_packets = true,
+            'x' => screen_takeover = true,
             'n' => animate = false,
             'a' => midi_controller = false,
             'l' => list_devices = true,
@@ -301,6 +318,13 @@ held by another process (a running komplement/konfigure) or by the kernel driver
     // This resets the HID device back to "MIDI Mode".
     let _ = hid.write_raw(&[0xa0, 0x07, 0x00]);
 
+    // `-x`: take the display over, the way the screen daemon will. Controls can
+    // report differently depending on who owns the display, so this is what
+    // makes that measurable.
+    if screen_takeover {
+        let _ = hid.write_raw(&[0xa0, 0x03, 0x04]);
+    }
+
     let mut leds = Leds::new();
     leds.init();
     if animate {
@@ -422,5 +446,64 @@ write but not read and makes the read-write open fail. Remove the ACLs with\n\
         leds.off(&hid);
     }
 
+    // Give the display back to the keyboard's own logic.
+    if screen_takeover {
+        let _ = hid.write_raw(&[0xa0, 0x07, 0x00]);
+    }
+
     exit(return_code);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The usage text and the parser are two lists of the same options, and an
+    /// option that is documented but rejected - or the other way round - is a
+    /// trap that only shows up on the hardware, one capture later. This walks
+    /// the usage text and asks the parser about every option it mentions.
+    #[test]
+    fn every_documented_option_is_accepted_by_the_parser() {
+        let usage = usage_text("komplement");
+        let mut seen = 0usize;
+
+        for line in usage.lines() {
+            let Some(rest) = line.strip_prefix(" -") else {
+                continue;
+            };
+            let letter = rest.chars().next().expect("an option letter after ` -`");
+
+            assert!(
+                SHORT_OPTIONS.contains(letter),
+                "the usage documents -{letter}, which the parser rejects"
+            );
+
+            let arguments = ["komplement".to_string(), format!("-{letter}")];
+            let mut options = GetOpt::new(
+                arguments.iter().map(String::as_str).collect(),
+                SHORT_OPTIONS,
+            );
+            assert_eq!(
+                options.next_option().map(|(option, _)| option),
+                Some(letter),
+                "-{letter} is documented but the parser does not return it"
+            );
+
+            seen += 1;
+        }
+
+        assert!(
+            seen >= 12,
+            "only {seen} options were found in the usage text; the scan is wrong"
+        );
+
+        // And the other way round: an option the parser takes but the usage does
+        // not mention is just as hidden as the reverse.
+        for letter in SHORT_OPTIONS.chars().filter(|c| *c != ':') {
+            assert!(
+                usage.contains(&format!(" -{letter}")),
+                "the parser accepts -{letter}, which the usage does not document"
+            );
+        }
+    }
 }

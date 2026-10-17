@@ -33,8 +33,12 @@ pub static BUTTON_NAMES: [&str; REAL_BUTTON_TOTAL] = [
     "Stop",
     "Preset Up",
     "Preset Down",
-    "Mute",
-    "Solo",
+    // Measured on an A49 (doc/Captured_Codes.md): bits 14 and 15 are the two
+    // buttons beside the display, which step through its pages. The inherited
+    // table called them Mute and Solo, but this keyboard has no such buttons;
+    // the old names still resolve, see BUTTON_ALIASES.
+    "Page Left",  // bit 14, buf[2] 0x40
+    "Page Right", // bit 15, buf[2] 0x80
     "Browser",
     "Plug-In",
     "Track",
@@ -64,6 +68,11 @@ pub static BUTTON_NAMES: [&str; REAL_BUTTON_TOTAL] = [
     "4D CCW", // counter-clockwise rotation of the 4D dial
 ];
 
+/// Names that mapping files of the original tool use for buttons that were
+/// renamed once the hardware was measured. Both spellings resolve, so an old
+/// mapping file keeps working.
+pub static BUTTON_ALIASES: [(&str, usize); 2] = [("Mute", 14), ("Solo", 15)];
+
 pub fn get_button_name(index: i32) -> &'static str {
     if index >= 0 && (index as usize) < REAL_BUTTON_TOTAL {
         BUTTON_NAMES[index as usize]
@@ -88,6 +97,15 @@ pub fn get_button_index(name: &str) -> Option<usize> {
             return Some(index);
         }
     }
+
+    // Old spellings come last: a name that the table itself matches must never
+    // be taken over by an alias.
+    for (old, index) in BUTTON_ALIASES {
+        if starts_with_ignore_case(old, name) {
+            return Some(index);
+        }
+    }
+
     None
 }
 
@@ -119,5 +137,34 @@ mod tests {
         }
         assert_eq!(get_button_name(-1), INVALID_KEY_OR_BUTTON);
         assert_eq!(get_button_name(42), INVALID_KEY_OR_BUTTON);
+    }
+
+    #[test]
+    fn the_two_buttons_beside_the_display_are_named_for_what_they_do() {
+        // Measured on an A49: bit 14 is the left button, bit 15 the right one.
+        assert_eq!(get_button_name(14), "Page Left");
+        assert_eq!(get_button_name(15), "Page Right");
+        assert_eq!(get_button_index("Page Left"), Some(14));
+        assert_eq!(get_button_index("page right"), Some(15));
+    }
+
+    #[test]
+    fn the_names_the_inherited_table_used_still_resolve() {
+        // Mapping files of the original tool say Mute and Solo; they must keep
+        // working even though the table now names those bits differently.
+        assert_eq!(get_button_index("Mute"), Some(14));
+        assert_eq!(get_button_index("Solo"), Some(15));
+        assert_eq!(get_button_index("Mut"), Some(14));
+
+        // ... and the aliases must not shadow a real name: the alias is needed
+        // precisely because no table entry answers to it any more.
+        for (old, _) in BUTTON_ALIASES {
+            for entry in BUTTON_NAMES {
+                assert!(
+                    !starts_with_ignore_case(entry, old),
+                    "the table now has `{entry}`, which answers to the alias `{old}`"
+                );
+            }
+        }
     }
 }

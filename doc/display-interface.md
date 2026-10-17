@@ -1,0 +1,115 @@
+# The display interface
+
+**Status:** design, agreed with the owner, **not implemented yet**. Everything marked *measured* comes from `doc/Captured_Codes.md`; everything marked *open* is a question that a capture or a run has to answer before code depends on it.
+
+## Why the DAW cannot simply write text
+
+The panel of an A-series keyboard is a mono 128x32 display, one bit per pixel, and it has **no text mode**: the text reports described in `doc/mini-screen.txt` were measured on hardware and do nothing. So the DAW cannot put text on the screen - nobody can except this project, which renders the pixels itself (frames, fonts, bars; see `references/a49-display-protocol.md` in the `komplementary-kontrol` skill).
+
+The interface therefore carries **data and messages, never pixels**. Layout, fonts, pages and the redraw policy stay here; the DAW says *what* is true, not *what to draw*. That division is what makes several sources possible at once and what keeps the screen useful when the DAW is not the thing being used.
+
+## The layers
+
+```
+  MCU (states)  ---\
+                    >---  Studio (state)  +  message queue  --->  page  --->  frame  --->  two HID reports
+  FIFO (messages) -/
+```
+
+A page is a function of the state and the chosen glyph size; the screen is a page plus an optional message overlay. Nothing above the renderer knows about pixels, and nothing in the renderer knows where the state came from.
+
+## Source 1: MCU (states)
+
+Reaper's *Mackie Control Universal* control surface is switched on in Preferences -> Control/OSC/Web -> **Add -> Mackie Control Universal**, pointed at a MIDI output, and then it feeds that port by itself, with no script and no ReaScript:
+
+- track names in the LCD SysEx blocks (about six or seven characters per track, eight tracks per bank);
+- the position/time display, in its own SysEx;
+- transport state as note messages (the same ones that light a real MCU's LEDs), faders and pans as CC;
+- the eight mute/solo states of the bank as note messages again.
+
+This is one-way listening: we never answer and never send, so we cannot disturb Reaper's handling of the surface.
+
+Why it is the right first channel: nothing has to be installed in the DAW and nothing is tied to a ReaScript API version; the data arrives by itself, which matters because a separate process could not poll Reaper for it any other way; it is a de-facto standard, so Ardour, Mixbus, Bitwig, Cubase and others will drive the same screen; and it carries exactly the kind of "state" the pages want to show.
+
+Its limits, stated plainly: MCU carries MCU's own vocabulary and no arbitrary text (that is what the FIFO is for); names arrive eight tracks at a time, so a list of more tracks needs us to send bank-up/bank-down notes back; **tempo is not in MCU at all**, so a tempo field would need OSC or a script; and SysEx has to actually pass through the port, which on Linux is not a given and is to be verified before anything relies on track names.
+
+The exact opcodes are **open**: they will be read from a capture of Reaper's MCU output on a virtual port, the same way the keyboard's own protocol was measured. Nothing in this interface is guessed from documentation alone.
+
+## Source 2: FIFO (messages)
+
+A named pipe, by default `$XDG_RUNTIME_DIR/kontroller.screen` (overridable), read line by line by the daemon:
+
+```sh
+echo "Render done" > "$XDG_RUNTIME_DIR/kontroller.screen"
+```
+
+One line is one message, shown over the current page for a few seconds. A leading `!` makes it **sticky**: it stays until it is replaced by another message or dismissed, which is what an error or a warning wants. Anything else is plain text; a line with an unknown prefix is still just text, so the format cannot be broken by accident.
+
+This is the channel for the things MCU cannot say: the result of an action, a warning, a countdown from a script, a line from a shell. It needs no configuration at all, works from bash, from a script, and from ReaScript (`io.open` and `write`). The daemon holds the FIFO open for reading, so a writer never blocks while it runs; when the daemon is **not** running a writer blocks on open, so scripts that must not hang should write with a timeout.
+
+The alternative that was considered and rejected (kept here for the record because it may come back): a Unix datagram socket, which never blocks a writer at all. It was rejected in favour of the simpler, more familiar pipe.
+
+## The state (`Studio`)
+
+Plain data, filled field by field by whichever source knows that field, so a missing source leaves the rest intact:
+
+- the selected track: number, name, volume, pan, mute, solo, record-arm;
+- transport: position, playing/stopped, recording, loop and click states;
+- the current MCU bank: its eight tracks with their fader and pan positions and their mute/solo states;
+- per-field freshness: which source wrote it and when, so the screen can show "as of when" and a dead source is visible rather than silently stale.
+
+**Open:** whether MCU reports meters at all, and in what form; whether the daemon has to answer MCU's device-query (some DAWs want a reply before they consider a surface alive; Reaper usually does not); how many tracks the bank view should be able to step through.
+
+## Messages
+
+A message is text plus two switches: sticky (yes/no) and a lifetime (default a few seconds). Rules:
+
+- a message takes the whole screen while it shows, and the page underneath is kept as it was;
+- when it expires the page comes back unchanged - the pages are recomputed, not restored;
+- **pressing a page button dismisses the message** and pages from there (the 4D dial and its button stay untouched, by the owner's decision, so paging is the dismiss gesture);
+- there is no message history. A message that arrives while nobody is looking at the keyboard is lost; that is a decision, not an oversight - the fourth page was wanted for general state instead.
+
+## The pages
+
+Four, in a ring, with the state each one reads:
+
+| # | page | shows | size notes |
+|---|---|---|---|
+| 1 | transport / time | position, playing/stopped/recording, loop, click | tempo is **open** (not in MCU) |
+| 2 | selected track | number and name, volume, pan, mute/solo/arm | the volume bar is the reason the renderer draws pixels, not characters |
+| 3 | tracks | the current bank's tracks with their flags, as text | stepping banks needs us to send bank notes back |
+| 4 | general info | the bank's eight channels as a bar each with a short label and mute/solo marks, plus a transport row | "something general that Reaper gives over MCU" - the exact contents are the owner's to refine once he sees them on the panel |
+
+The four navigate with the two buttons beside the display: **Page Left is bit 14 (0x40 in `buf[2]`) and Page Right is bit 15 (0x80)**, both measured, both HID-only, one packet per press and one per release, and identical whether the display is Native Instruments' or ours. They do not auto-repeat, so accelerated paging would need hold detection here; not wanted yet.
+
+**SHIFT (bit 0) + a page button cycles the glyph size**: small 5x7 (four lines, 21 characters), medium 7x9 (three lines, 16 characters), large (two double-size lines, 10 characters). The mixed "medium value, small sides" layout stays available as a per-page choice if it turns out to be the one he prefers on the panel.
+
+## Who owns the panel
+
+While the daemon runs, it owns the display: `a0 03 04` after opening the device, `a0 07 00` on every exit path, including SIGINT and SIGTERM, so the keyboard's own logic comes back. If the device cannot be opened the daemon says why and exits; if it cannot open `/dev/uinput` it does not need it - the daemon never sends keystrokes.
+
+`komplement` (keystrokes) and the daemon can read the same HID interface at the same time. The one collision to settle: `mappings/reaper.map` still maps **Page Left** to Alt+M and **Page Right** to Alt+Shift+S, so pressing a page button while the daemon runs would both page the screen and toggle mute in Reaper. The mapping stays as it is for now, and should be commented out before the daemon is run permanently. **Open, for the owner.**
+
+## Redraw policy
+
+- a frame is 512 bytes in two 265-byte reports;
+- at most 20 frames per second, and only when the picture actually changed - an unchanged frame is compared byte for byte and not sent;
+- messages may bypass that limit, but not more often than about ten per second;
+- the two reports of one frame go out back to back, never interleaved with another frame.
+
+## Implementation order
+
+Each step is verifiable on the panel before the next one starts:
+
+1. the model and the four pages, rendered from a canned state - the screen, the sizes and the paging can be judged with no DAW involved at all;
+2. a capture of Reaper's MCU output, then the decoder that fills `Studio` from it - opcodes measured, not guessed;
+3. the FIFO reader and the message overlay;
+4. the daemon: ownership, paging, sizes, the redraw policy, run by hand at first, as a systemd unit later.
+
+## What is deliberately absent
+
+- No pixels, no fonts, no text protocol over the wire: the DAW never draws.
+- No ReaScript, no Lua, no per-project installation.
+- No OSC in the first version (it is the fallback if tempo or meters turn out to be needed).
+- No message history, no logging to disk, no configuration file beyond the FIFO path.
+- Nothing in this interface depends on the fourth page's contents, on meters, or on tempo, so those can be decided later without redoing the rest.

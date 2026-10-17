@@ -28,8 +28,8 @@ are all supported and can be assigned:
     Stop
     Preset Up
     Preset Down
-    Mute
-    Solo
+    Page Left
+    Page Right
     Browser
     Plug-In
     Track
@@ -43,8 +43,15 @@ are all supported and can be assigned:
     4D CW
     4D CCW
 
-Measured bit values (A49, see doc/Captured_Codes.md): 4D Up is bit 21, 4D Left
+Measured bit values (A49, see doc/Captured_Codes.md): Page Left is bit 14 and
+Page Right bit 15 (the two buttons beside the display), 4D Up is bit 21, 4D Left
 bit 22, 4D Right bit 23, 4D Down bit 24 and 4D Button bit 33.
+
+The unnamed `ButtonN` spelling works as well, and two old names are kept as
+aliases: `Mute` still means `Page Left` and `Solo` still means `Page Right`, so
+mapping files written before the buttons were measured keep working. This keyboard
+has no Mute or Solo buttons at all; the names were inherited from the original
+tool's table and were never measured on an A49.
 
 > Note that *only* "Shift" can be combined with other buttons, so the following 
 > would be valid in your mapping configuration file:

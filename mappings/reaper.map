@@ -61,14 +61,17 @@ Shift+Tempo=LeftAlt,Enter
 
 # Tracks ---------------------------------------------------------------------
 # Preset Up/Down walk the track list; with SHIFT they extend the track
-# selection instead of replacing it. Mute = Alt+M is the stock Reaper toggle.
+# selection instead of replacing it. Page Left = Alt+M is the stock Reaper mute
+# toggle. (These two bits beside the display were called Mute and Solo by the
+# inherited table; both spellings still work, and the screen daemon will want
+# them for paging instead - see doc/Captured_Codes.md.)
 Preset Up=LeftCtrl,LeftAlt,Up
 Preset Down=LeftCtrl,LeftAlt,Down
 Shift+Preset Up=LeftCtrl,LeftAlt,LeftShift,Up
 Shift+Preset Down=LeftCtrl,LeftAlt,LeftShift,Down
 Track=LeftCtrl,T
-Mute=LeftAlt,M
-Solo=LeftAlt,LeftShift,S
+Page Left=LeftAlt,M
+Page Right=LeftAlt,LeftShift,S
 
 # Browser and plug-ins -------------------------------------------------------
 # Browser = media explorer (audition loops), Plug-In = FX chain of the

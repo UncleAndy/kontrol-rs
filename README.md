@@ -106,6 +106,14 @@ The medium font (`src/font_medium.rs`, 7x9, sixteen characters per line) is auth
 `tools/font-medium-glyphs.txt` and generated into Rust by `tools/font-medium-table.awk`, which also
 prints a sheet of the whole font as the panel will show it.
 
+Controls that are not handled yet are found by capture rather than by guessing:
+`tools/capture-a49.sh` walks the encoders, the 4D dial and the pushes, and
+`tools/capture-screen-buttons.sh` covers the two buttons beside the display (a HID bit, a MIDI
+controller, or silent), twice - once with the display in MIDI mode and once with it taken over by
+`komplement -x`, which is the state a screen daemon runs in. Both write HID and MIDI logs with
+matching timestamps; `doc/Captured_Codes.md` holds what they have measured so far, and
+`doc/Supported_Keys.md` what is therefore mappable.
+
 The keyboard needs read/write permission for the user running `komplement`, and `/dev/uinput`
 needs write permission for sending keystrokes. There is a NixOS module for that (below); the C
 project's `README.md` and `udev/55-komplete-kontrol.rules` describe the manual route.

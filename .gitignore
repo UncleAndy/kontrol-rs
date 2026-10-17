@@ -25,3 +25,9 @@ rustc-ice-*.txt
 
 # nix build output symlink
 /result
+
+# Capture directories of the measurement scripts (tools/capture-*.sh). What they
+# measured belongs in doc/Captured_Codes.md, not in the repository.
+kk-capture-*/
+kk-screen-buttons-*/
+kk-takeover/

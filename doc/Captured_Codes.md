@@ -52,6 +52,47 @@ a normal button bit and is currently masked out together with the rest of
 `buf[5]`. Easing the eight encoders in produced no packets at all - on the A49
 the encoder push does not seem to be reported (in MIDI mode at least).
 
+## The two buttons beside the display
+
+Measured with `tools/capture-screen-buttons.sh` (HID `-d` and `amidi` side by
+side), capture `kk-screen-buttons-20261017-021840`, first pass (display still in
+MIDI mode): four prompts, 16 HID reports, and not one MIDI byte.
+
+| button | bit | mask | byte | value | name in the table |
+|---|---|---|---|---|---|
+| left | 14 | 0x0000004000 | buf[2] | 0x40 | "Mute" |
+| right | 15 | 0x0000008000 | buf[2] | 0x80 | "Solo" |
+
+One packet per press and one per release, three presses per button, no repeats
+and no other bit moving, so the two are told apart by a single bit each - which
+is all that is needed to page a screen. The log follows the prompts exactly:
+three presses of bit 14, three of bit 15, then bit 14 and bit 15 once each, then
+nothing at all during the quiet step. **Nothing arrives over MIDI**, so these are
+HID-only, like most of the keyboard's buttons; only knob *rotation* is MIDI.
+
+The names are inherited, not measured: `button_names.c` (and this port after it)
+calls bits 14 and 15 Mute and Solo, but no capture had ever pressed either on an
+A49 - the earlier capture only pressed a known button as a control. Asked
+directly, the owner confirms this keyboard **has no Mute or Solo buttons at all**,
+so those two bits are the display's page buttons and the inherited names were
+simply wrong for it. They are now called **Page Left** (bit 14) and **Page Right**
+(bit 15), with `Mute`/`Solo` kept as aliases so mapping files written against the
+old names still parse (`doc/Supported_Keys.md`), and the shipped mappings
+(`mappings/reaper.map`, `mappings/rosegarden.map`) spell them the new way.
+
+The second pass - the same sequence with the display taken over (`a0 03 04`) -
+first produced no data at all, for a reason in the tool rather than in the
+keyboard: `-x` was written into the usage text but left out of the parser's
+option list, so `komplement` printed `Unknown option` and exited at once. Fixed,
+and a test now walks the usage text and asks the parser about every option it
+mentions (and the other way round); that test immediately found a second, older
+divergence of the same kind - `-s` was documented but rejected by the parser,
+while `-h` was accepted but never documented. With that fixed the pass ran and
+came out **identical** to the first one: bits 14 and 15, one packet per press and
+per release, nothing during the quiet step, nothing over MIDI. So who owns the
+display does not change what these buttons report, and paging can be driven from
+the HID path alone.
+
 ## Rotary knobs: rotation - MIDI, not HID
 
 Rotation never shows up in the HID report: the eight knobs send absolute
