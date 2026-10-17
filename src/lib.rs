@@ -31,6 +31,7 @@ pub mod config;
 pub mod defs;
 pub mod engine;
 pub mod font;
+pub mod font_medium;
 pub mod hid;
 pub mod hid_dump;
 pub mod keys;

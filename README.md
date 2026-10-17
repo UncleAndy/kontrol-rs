@@ -93,12 +93,18 @@ fully lit, and replugging the keyboard is what clears that.
 
 `komplement -S <state> -p 1740` shows one named state and waits (Enter, or 10 s without a terminal),
 so a state can be looked at or photographed: `on, off, top, bottom, left, right, vstripes, hstripes,
-border, message, nav, navmid, navbig, text60`. `message` draws four lines with the built-in 5x7 font
-(`src/font.rs`, 21 characters per line, lines at pixel rows 0, 8, 16 and 24) and is the end-to-end
-check of the renderer; `nav`, `navmid` and `navbig` draw the navigation screen for a sample track in
-three sizes (laid out in `src/nav.rs`): four small lines with a bar, three lines with a double-size
-value, and two double-size lines; `text60` is the text protocol guessed at in `doc/mini-screen.txt` -
-it was measured on hardware and does nothing, so the port does not depend on it.
+border, message, nav, navmed, navmid, navbig, glyphs, text60`. `message` draws four lines with the
+built-in 5x7 font (`src/font.rs`, 21 characters per line, lines at pixel rows 0, 8, 16 and 24) and is
+the end-to-end check of the renderer; `nav`, `navmed`, `navmid` and `navbig` draw the navigation
+screen for a sample track in four sizes (laid out in `src/nav.rs`): four small lines with a bar, three
+lines of the medium 7x9 font, three lines with a double-size value, and two double-size lines;
+`glyphs` shows the whole medium font on the panel; `text60` is the text protocol guessed at in
+`doc/mini-screen.txt` - it was measured on hardware and does nothing, so the port does not depend on
+it.
+
+The medium font (`src/font_medium.rs`, 7x9, sixteen characters per line) is authored as art in
+`tools/font-medium-glyphs.txt` and generated into Rust by `tools/font-medium-table.awk`, which also
+prints a sheet of the whole font as the panel will show it.
 
 The keyboard needs read/write permission for the user running `komplement`, and `/dev/uinput`
 needs write permission for sending keystrokes. There is a NixOS module for that (below); the C

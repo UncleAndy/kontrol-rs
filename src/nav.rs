@@ -252,6 +252,72 @@ pub fn render_mid(state: &NavState) -> Frame {
     frame
 }
 
+/// The pixel rows of the uniform medium layout: three lines of nine rows, two
+/// rows apart, which is what the 7x9 font is sized for.
+pub const MEDIUM_LINES: [usize; 3] = [0, 11, 22];
+
+/// Characters that fit on a medium line.
+pub const MEDIUM_LINE_CHARACTERS: usize = crate::font_medium::characters_per_line(WIDTH);
+
+/// Characters the bottom line of the uniform medium layout uses, leaving room for
+/// the knob marker beside it.
+const MEDIUM_INFO_CHARACTERS: usize = 13;
+
+/// Draws `text` in the medium font so that it ends at the right edge.
+fn draw_right_medium(frame: &mut Frame, row: usize, text: &str) {
+    let text = clip_to(text, MEDIUM_LINE_CHARACTERS);
+    let width = crate::font_medium::text_width(text.chars().count());
+    screen::draw_text_medium(frame, WIDTH - width, row, &text);
+}
+
+/// The uniform medium layout: three lines, all of them in the 7x9 font - the
+/// track, then parameter and value, then position, tempo and transport with the
+/// knob marker. It carries the same information as the four-line `render`, at one
+/// size throughout, which is what the medium font exists for.
+///
+/// ```text
+/// 2 BASS DI
+/// VOL -6.1 DB
+/// 2:14.3 120BPM PLAY   K3
+/// ```
+pub fn render_medium(state: &NavState) -> Frame {
+    let mut frame = screen::off();
+
+    screen::draw_text_medium(
+        &mut frame,
+        0,
+        MEDIUM_LINES[0],
+        &clip_to(&state.track, MEDIUM_LINE_CHARACTERS),
+    );
+
+    let value = format!("{} {}", state.parameter, state.value);
+    screen::draw_text_medium(
+        &mut frame,
+        0,
+        MEDIUM_LINES[1],
+        &clip_to(&value, MEDIUM_LINE_CHARACTERS),
+    );
+
+    let info = format!(
+        "{} {}BPM {}",
+        state.position,
+        state.tempo,
+        state.transport.word()
+    );
+    screen::draw_text_medium(
+        &mut frame,
+        0,
+        MEDIUM_LINES[2],
+        &clip_to(&info, MEDIUM_INFO_CHARACTERS),
+    );
+
+    if let Some(knob) = state.knob {
+        draw_right_medium(&mut frame, MEDIUM_LINES[2], &format!("K{knob}"));
+    }
+
+    frame
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -452,5 +518,46 @@ mod tests {
             ..NavState::sample()
         });
         assert_ne!(playing, stopped);
+    }
+
+    #[test]
+    fn the_uniform_medium_layout_draws_three_lines_of_the_medium_font() {
+        let frame = render_medium(&NavState::sample());
+
+        // Sixteen characters per line, three lines of nine rows.
+        assert_eq!(MEDIUM_LINE_CHARACTERS, 16);
+
+        // Line 1 in page 0, line 2 across pages 1 and 2 (rows 11..19), line 3
+        // across pages 2 and 3 (rows 22..30).
+        assert!(frame[..PAGE_BYTES].iter().any(|byte| *byte != 0x00));
+        assert!(frame[PAGE_BYTES..2 * PAGE_BYTES].iter().any(|byte| *byte != 0x00));
+        assert!(frame[2 * PAGE_BYTES..3 * PAGE_BYTES].iter().any(|byte| *byte != 0x00));
+        assert!(frame[3 * PAGE_BYTES..].iter().any(|byte| *byte != 0x00));
+
+        // Row 31 stays free, and so do the two rows between the lines.
+        for column in 0..WIDTH {
+            assert_eq!(frame[3 * PAGE_BYTES + column] & 0x80, 0, "row 31 is used");
+        }
+    }
+
+    #[test]
+    fn the_uniform_medium_layout_clips_a_long_track_name() {
+        let fits = NavState {
+            track: "SIXTEEN CHARS!!".to_string(),
+            ..NavState::sample()
+        };
+        let cut = NavState {
+            track: "SIXTEEN CHARS!! AND MORE".to_string(),
+            ..NavState::sample()
+        };
+        assert_eq!(render_medium(&fits), render_medium(&cut));
+
+        assert_ne!(
+            render_medium(&NavState::sample()),
+            render_medium(&NavState {
+                knob: None,
+                ..NavState::sample()
+            })
+        );
     }
 }

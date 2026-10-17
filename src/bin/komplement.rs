@@ -60,8 +60,8 @@ Options:
 
  -S <state>           Show one named state on the display and wait, so it can be
                       looked at or photographed: on, off, top, bottom, left,
-                      right, vstripes, hstripes, border, message, nav, navmid,
-                      navbig, text60.
+                      right, vstripes, hstripes, border, message, nav, navmed,
+                      navmid, navbig, glyphs, text60.
 
 Advanced options:
  -p <productId>       USB product ID (in case you want to try other hardware).

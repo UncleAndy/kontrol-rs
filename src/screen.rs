@@ -54,7 +54,7 @@ pub const MIDI_MODE: [u8; 3] = [0xa0, 0x07, 0x00];
 pub type Frame = [u8; FRAME_BYTES];
 
 /// The states `-S` knows, in the order the help lists them.
-pub const STATE_NAMES: [&str; 14] = [
+pub const STATE_NAMES: [&str; 16] = [
     "on",
     "off",
     "top",
@@ -66,8 +66,10 @@ pub const STATE_NAMES: [&str; 14] = [
     "border",
     "message",
     "nav",
+    "navmed",
     "navmid",
     "navbig",
+    "glyphs",
     "text60",
 ];
 
@@ -248,6 +250,60 @@ pub fn draw_bar(frame: &mut Frame, x: usize, row: usize, width: usize, height: u
     }
 }
 
+/// Draws text with the medium 7x9 font. Its glyphs are stored row by row, so they
+/// are laid out row by row here too - and a glyph may therefore cross a page
+/// boundary, which no glyph of the small font does.
+pub fn draw_text_medium(frame: &mut Frame, x: usize, row: usize, text: &str) {
+    let mut column = x;
+
+    for character in text.chars() {
+        for (offset, row_bits) in crate::font_medium::glyph(character).iter().enumerate() {
+            let y = row + offset;
+            if y >= PAGES * 8 {
+                break;
+            }
+
+            for c in 0..crate::font_medium::GLYPH_WIDTH {
+                if row_bits & (1 << c) == 0 {
+                    continue;
+                }
+                let target = column + c;
+                if target < WIDTH {
+                    frame[(y / 8) * PAGE_BYTES + target] |= 1 << (y % 8);
+                }
+            }
+        }
+
+        column += crate::font_medium::GLYPH_WIDTH + crate::font_medium::GLYPH_SPACING;
+    }
+}
+
+/// How many glyphs the sheet puts on one line.
+pub const SHEET_COLUMNS: usize = 16;
+
+/// The pixel row the sheet's lines start on: nine rows of glyphs, two empty.
+pub const SHEET_LINE_PITCH: usize = 11;
+
+/// Every glyph of the medium font, sixteen to a line - three lines of nine rows,
+/// which is what the screen holds. Drawn to be looked at, not to be informative.
+pub fn glyph_sheet() -> Frame {
+    let mut frame = off();
+    let pitch = crate::font_medium::GLYPH_WIDTH + crate::font_medium::GLYPH_SPACING;
+
+    for (index, (character, _)) in crate::font_medium::GLYPHS.iter().enumerate() {
+        let slot = index % SHEET_COLUMNS;
+        let line = index / SHEET_COLUMNS;
+        draw_text_medium(
+            &mut frame,
+            slot * pitch,
+            line * SHEET_LINE_PITCH,
+            &character.to_string(),
+        );
+    }
+
+    frame
+}
+
 /// Two lines of text on a dark screen: the state that shows whether our own
 /// rendering arrives at all.
 pub fn message_frame() -> Frame {
@@ -274,8 +330,10 @@ pub fn named_frame(name: &str) -> Option<Frame> {
         "border" => Some(border()),
         "message" => Some(message_frame()),
         "nav" => Some(crate::nav::render(&crate::nav::NavState::sample())),
+        "navmed" => Some(crate::nav::render_medium(&crate::nav::NavState::sample())),
         "navmid" => Some(crate::nav::render_mid(&crate::nav::NavState::sample())),
         "navbig" => Some(crate::nav::render_big(&crate::nav::NavState::sample())),
+        "glyphs" => Some(glyph_sheet()),
         _ => None,
     }
 }
@@ -283,9 +341,10 @@ pub fn named_frame(name: &str) -> Option<Frame> {
 pub fn state_help() -> String {
     format!(
         "States: {} (message draws a fixed four-line text; nav is the four-line\n\
-navigation screen, navmid the three-line one with a double-size value and navbig\n\
-two double-size lines; text60 clears the screen and sends the text reports guessed\n\
-at in doc/mini-screen.txt - measured: it does nothing).",
+navigation screen, navmed the uniform three-line one in the 7x9 font, navmid the\n\
+three-line one with a double-size value and navbig two double-size lines; glyphs\n\
+shows the whole 7x9 font, text60 clears the screen and sends the text reports\n\
+guessed at in doc/mini-screen.txt - measured: it does nothing).",
         STATE_NAMES.join(", ")
     )
 }
@@ -634,6 +693,60 @@ mod tests {
         // Nineteen of the thirty-eight interior columns are filled.
         assert_eq!(half[PAGE_BYTES + 29], FULL);
         assert_eq!(half[PAGE_BYTES + 30], EDGES_ONLY);
+    }
+
+    #[test]
+    fn medium_text_lands_on_the_row_it_is_asked_for() {
+        let mut frame = off();
+        draw_text_medium(&mut frame, 0, 11, "A");
+
+        // Rows 11..19 are pages 1 and 2; nothing else is touched.
+        assert!(frame[..PAGE_BYTES].iter().all(|byte| *byte == 0x00));
+        assert!(frame[PAGE_BYTES..2 * PAGE_BYTES]
+            .iter()
+            .any(|byte| *byte != 0x00));
+        assert!(frame[2 * PAGE_BYTES..3 * PAGE_BYTES]
+            .iter()
+            .any(|byte| *byte != 0x00));
+        assert!(frame[3 * PAGE_BYTES..].iter().all(|byte| *byte == 0x00));
+    }
+
+    #[test]
+    fn medium_text_is_cut_at_the_right_edge() {
+        let mut frame = off();
+        draw_text_medium(&mut frame, 0, 0, &"A".repeat(16));
+        let full = frame;
+
+        let mut frame = off();
+        draw_text_medium(&mut frame, 0, 0, &"A".repeat(20));
+        assert_eq!(full, frame);
+    }
+
+    #[test]
+    fn medium_text_starting_below_the_screen_changes_nothing() {
+        let mut frame = off();
+        draw_text_medium(&mut frame, 0, 32, "A");
+        assert_eq!(frame, off());
+    }
+
+    #[test]
+    fn the_glyph_sheet_shows_every_glyph_on_three_lines() {
+        assert_eq!(
+            crate::font_medium::GLYPHS.len(),
+            SHEET_COLUMNS * 3,
+            "the sheet has room for exactly three lines of glyphs"
+        );
+
+        let frame = glyph_sheet();
+        for line in 0..3 {
+            let page = line * SHEET_LINE_PITCH / 8;
+            assert!(
+                frame[page * PAGE_BYTES..(page + 1) * PAGE_BYTES]
+                    .iter()
+                    .any(|byte| *byte != 0x00),
+                "sheet line {line} is empty"
+            );
+        }
     }
 
     #[test]
