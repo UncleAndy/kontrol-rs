@@ -268,6 +268,12 @@ it panicked - the loop says so, starts it again, and sends the next frame in ful
 thread knows nothing. The twenty-frames-a-second limit lives on that thread too, so a fast fader no
 longer costs the reading side anything.
 
+**With a mapping, `-X` is the merged mode - and it is the mode to use:** `-X auto -m
+mappings/reaper.map` draws the panel and turns the keyboard into keystrokes at the same time, on one
+HID device, with a report read and answered before any frame is drawn. Without `-m` it stays what it
+was - the decoder's view alone. A virtual keyboard that cannot be opened is not fatal there: the panel
+goes on working, and it says so.
+
 This is the *finding* half of the service that is planned; the service itself - one program with
 keystrokes and panel, the panel in a task of its own that is restarted when it fails - is the
 next step, and `doc/display-interface.md` keeps that plan.

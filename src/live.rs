@@ -18,6 +18,7 @@ use crate::engine;
 use crate::hid::Hid;
 use crate::mcu::Decoder;
 use crate::mcu_port::McuInput;
+use crate::outputs::Keys;
 use crate::panel::{Job, Panel};
 use crate::studio::{Page, Size};
 use crate::timecode::TimeLayout;
@@ -152,6 +153,10 @@ pub fn run(
     size: Size,
     quiet: bool,
     layout: TimeLayout,
+    // The keystroke half, when a mapping file was given: this is the merged mode -
+    // one program, one HID device, the panel and the keys at once, with the keys
+    // first (a report is read and answered before any frame is drawn).
+    mut keys: Option<Keys<'_>>,
 ) -> Result<(), String> {
     if !quiet {
         println!(
@@ -205,6 +210,17 @@ pub fn run(
     // been said out loud: the search runs twice a second, the report happens once.
     let mut last_search = Instant::now();
     let mut reported_absent = false;
+    // The keystroke half's LEDs: lit the way start-up does, on the device that is
+    // there now, and lit again whenever the keyboard comes back.
+    let mut leds_refused = false;
+    if let (Some(keys), Some(device)) = (keys.as_mut(), keyboard.as_ref()) {
+        if let Some(reason) = keys.light_up(device) {
+            leds_refused = true;
+            if !quiet {
+                println!("The device refused the LED picture: {reason}");
+            }
+        }
+    }
 
     while !stop_requested() {
         // The DAW first: its whole queue goes into the state before anything is
@@ -291,9 +307,29 @@ pub fn run(
             Some(device) => match device.read_timeout(&mut report, KEYBOARD_WAIT_MILLIS) {
                 Ok(length) if length > 0 => {
                     paging.pressed(&report[..length]);
+                    // The same report drives the keystroke half: one device, read
+                    // once, answered in both worlds - which is what the merge is.
+                    if let Some(keys) = keys.as_mut() {
+                        if let Some(reason) = keys.report(&report[..length], device) {
+                            if !leds_refused {
+                                leds_refused = true;
+                                if !quiet {
+                                    println!("The device refused an LED report: {reason}");
+                                }
+                            }
+                        }
+                    }
                 }
                 Ok(_) => {}
-                Err(message) => keyboard_gone = Some(message),
+                Err(message) => {
+                    // No release will arrive from a keyboard that is going away,
+                    // so everything held is let go of while the handle is still
+                    // usable for writes.
+                    if let Some(keys) = keys.as_mut() {
+                        keys.release_all(device);
+                    }
+                    keyboard_gone = Some(message);
+                }
             },
             None => {
                 // Nothing to read from: give the loop a beat so the DAW keeps
@@ -308,6 +344,14 @@ pub fn run(
                             // taken over again and the frame is written in full.
                             let _ = device.write_raw(&[0xa0, 0x03, 0x04]);
                             redraw = true;
+                            // Its LEDs went with it too.
+                            if let Some(keys) = keys.as_mut() {
+                                if let Some(reason) = keys.light_up(&device) {
+                                    if !quiet {
+                                        println!("The device refused the LED picture: {reason}");
+                                    }
+                                }
+                            }
                             keyboard = Some(device);
                             reported_absent = false;
                             if !quiet {
@@ -392,6 +436,14 @@ pub fn run(
 
     // The panel first, so nothing is drawing while the display is handed back.
     panel.stop();
+
+    // The LEDs out, the way the plain mode does it, on whichever handle is
+    // current.
+    if let Some(keys) = keys.as_mut() {
+        if let Some(device) = keyboard.as_ref() {
+            keys.farewell(device);
+        }
+    }
 
     // The run is over, for whatever reason: give the display back to the
     // keyboard's own logic first, on whichever handle is current - the one

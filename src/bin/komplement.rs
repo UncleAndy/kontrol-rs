@@ -13,11 +13,12 @@ use kontrol_rs::defs::{
     DEFAULT_PID, DEFAULT_UINPUT_PATH, DEFAULT_VID, KOMPLEMENT_NAME, KOMPLEMENT_VERSION,
     READ_BUFFER_SZ, RISK_DISCLAIMER,
 };
-use kontrol_rs::engine::{Engine, Sink};
+use kontrol_rs::engine::Engine;
 use kontrol_rs::hid::Hid;
 use kontrol_rs::hid_dump::Dump;
 use kontrol_rs::leds::Leds;
 use kontrol_rs::mapping::MappingTable;
+use kontrol_rs::outputs::{Keys, Outputs};
 use kontrol_rs::settings::Settings;
 use kontrol_rs::studio::{Page, Size};
 use kontrol_rs::uinput::Keyboard;
@@ -54,6 +55,9 @@ Options:
 
  -o /path/to/uinput   The path to uinput device file ({DEFAULT_UINPUT_PATH}).
  -m /path/to/mapping  The path to mapping file (required to be useful).
+                      In the -X mode a mapping makes it the merged mode: the
+                      panel and the keystrokes run together in one program, on
+                      one HID device.
  -c /path/to/settings The settings file to read. Without -c,
                       $XDG_CONFIG_HOME/komplement/config (usually
                       ~/.config/komplement/config) is read if it is there; an
@@ -101,7 +105,10 @@ Options:
                       decides (mcu = ...), and failing that the list of ports is
                       printed to choose from. The display is taken over for the
                       run and given back
-                      on the way out; nothing is ever sent to the DAW. With
+                      on the way out; nothing is ever sent to the DAW. With a
+                      mapping (-m) the keystrokes run at the same time: both
+                      halves in one program on one HID device, keys first, and
+                      whichever half fails leaves the other running. With
                       -S page-track:large the page and the glyph size are chosen
                       (default: page-track at medium). The two page buttons turn
                       the page while it runs, and with SHIFT held down they change
@@ -126,60 +133,6 @@ so a model this list does not know yet is one `pid = ...` line away.
 
 {RISK_DISCLAIMER}"
     )
-}
-
-/// Where the engine's decisions are actually carried out.
-struct Outputs<'a> {
-    hid: &'a Hid,
-    leds: &'a mut Leds,
-    /// `None` until the virtual keyboard exists.
-    keyboard: Option<&'a mut Keyboard>,
-    mmc: Option<&'a MmcPort>,
-    /// The text of the first LED report the device refused, if any. The C tool
-    /// only knows *that* something failed; keeping the reason is what tells
-    /// "opened but not writable" apart from "could not be opened at all".
-    failed: Option<String>,
-}
-
-impl Sink for Outputs<'_> {
-    fn keystroke(&mut self, code: u16, press: bool) {
-        let Some(keyboard) = self.keyboard.as_deref_mut() else {
-            return;
-        };
-        let result = if press {
-            keyboard.press(code)
-        } else {
-            keyboard.release(code)
-        };
-        if let Err(err) = result {
-            eprintln!("Failed to send key {code}: {err}");
-        }
-    }
-
-    fn mmc(&mut self, command: u8) {
-        // MMC is a one-shot message, only sent when it is pressed.
-        if let Some(port) = self.mmc {
-            if let Err(err) = port.send_mmc(command, 0) {
-                eprintln!("Failed to send MMC: {err}");
-            }
-        }
-    }
-
-    fn led(&mut self, index: i32, state: u8) {
-        self.leds.update(index, state);
-    }
-
-    fn leds_sync(&mut self) {
-        if let Err(err) = self.leds.sync(self.hid) {
-            if self.failed.is_none() {
-                self.failed = Some(err);
-            }
-        }
-    }
-
-    fn failed(&self) -> bool {
-        self.failed.is_some()
-    }
 }
 
 fn main() {
@@ -389,6 +342,30 @@ fn main() {
             }
         };
 
+        // The merged mode. With a mapping file this is one program with both
+        // halves - the panel *and* the keystrokes, on this single HID handle,
+        // which is the merge the whole daemon plan leads to. Without `-m` it
+        // stays what it has been: the decoder's view on the panel.
+        let mut table = MappingTable::new();
+        let mut mapping_given = false;
+        if let Some(path) = mapping_path.as_deref() {
+            match config_read(path, !quiet, &mut table) {
+                Ok(()) => mapping_given = true,
+                Err(err) => {
+                    match err {
+                        kontrol_rs::config::ConfigError::NotFound => println!(
+                            "The file `{path}` could not be found in the current path, nor in the mappings folder."
+                        ),
+                        kontrol_rs::config::ConfigError::Io(message) => {
+                            println!("The file `{path}` could not be opened: {message}")
+                        }
+                    }
+                    println!("The mapping file could not be read.");
+                    exit(2);
+                }
+            }
+        }
+
         match Hid::open(vid as u16, pid as u16) {
             Ok(hid) => {
                 let input = match kontrol_rs::mcu_port::McuInput::open_chosen(&chosen) {
@@ -398,12 +375,58 @@ fn main() {
                         exit(1);
                     }
                 };
+
+                // The keystroke half, when there is a mapping: the virtual
+                // keyboard, the LED picture and the MMC port. A virtual keyboard
+                // that cannot be opened is *not* fatal here - the panel is what
+                // this mode is for, and it goes on working without one - which is
+                // the other half of "keys first, panel second": whatever is
+                // missing, the rest keeps running.
+                let mut virtual_keyboard = match Keyboard::open() {
+                    Ok(keyboard) => Some(keyboard),
+                    Err(err) => {
+                        println!("uinput open: {err}");
+                        println!(
+                            "Keystrokes cannot be sent, so only the panel runs. `{}` has to be read *and* written (see `ls -l /dev/uinput`).",
+                            kontrol_rs::uinput::UINPUT_PATH
+                        );
+                        None
+                    }
+                };
+                let mmc = if midi_controller {
+                    match kontrol_rs::alsa_seq::MmcPort::open(None) {
+                        Ok(port) => Some(port),
+                        Err(message) => {
+                            println!("Error opening the ALSA port for MMC. {message}");
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                let mut leds = Leds::new();
+                leds.init();
+                let keys = match (mapping_given, virtual_keyboard.as_mut()) {
+                    (true, Some(keyboard)) => Some(Keys::new(
+                        Engine::new(table),
+                        &mut leds,
+                        keyboard,
+                        mmc.as_ref(),
+                        animate,
+                    )),
+                    _ => None,
+                };
+                if mapping_given && keys.is_none() && !quiet {
+                    println!("The mapping was read, but there is no virtual keyboard to send it to.");
+                }
+
                 let _ = hid.write_raw(&[0xa0, 0x03, 0x04]);
                 // The handle is handed over: the loop may have to open the
                 // keyboard again after it is unplugged, and it gives the display
                 // back to the keyboard itself on the way out, whichever handle
                 // that is by then.
-                let outcome = kontrol_rs::live::run(hid, input, page, size, quiet, time_layout);
+                let outcome =
+                    kontrol_rs::live::run(hid, input, page, size, quiet, time_layout, keys);
                 if let Err(message) = outcome {
                     println!("{message}");
                     exit(1);
@@ -545,13 +568,7 @@ held by another process (a running komplement/konfigure) or by the kernel driver
     // loop reads from and that handle is replaced when the keyboard comes back
     // after an unplug.
     {
-        let mut outputs = Outputs {
-            hid: &hid,
-            leds: &mut leds,
-            keyboard: None,
-            mmc: None,
-            failed: None,
-        };
+        let mut outputs = Outputs::for_turn(&hid, &mut leds, None, None);
         engine.light_up_initial(&mut outputs, animate);
         if let Some(reason) = outputs.failed.clone() {
             println!(
@@ -641,13 +658,8 @@ write but not read and makes the read-write open fail. Remove the ACLs with\n\
                         // Its LEDs went with it, so they are lit the way start-up
                         // does, and the display is taken over again.
                         {
-                            let mut fresh = Outputs {
-                                hid: &opened,
-                                leds: &mut leds,
-                                keyboard: Some(&mut keyboard),
-                                mmc: mmc.as_ref(),
-                                failed: None,
-                            };
+                            let mut fresh =
+                                Outputs::for_turn(&opened, &mut leds, Some(&mut keyboard), mmc.as_ref());
                             engine.light_up_initial(&mut fresh, false);
                         }
                         let _ = opened.write_raw(&[0xa0, 0x03, 0x04]);
@@ -676,13 +688,7 @@ write but not read and makes the read-write open fail. Remove the ACLs with\n\
 
         // Built per turn: it borrows the current handle, and that handle is a
         // different one after the keyboard was unplugged and came back.
-        let mut outputs = Outputs {
-            hid: current,
-            leds: &mut leds,
-            keyboard: Some(&mut keyboard),
-            mmc: mmc.as_ref(),
-            failed: None,
-        };
+        let mut outputs = Outputs::for_turn(current, &mut leds, Some(&mut keyboard), mmc.as_ref());
 
         let read = match current.read_timeout(&mut buffer, 2000) {
             Ok(read) => read,

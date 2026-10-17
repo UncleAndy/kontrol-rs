@@ -51,6 +51,7 @@ pub mod mcu;
 pub mod mcu_port;
 pub mod mmc;
 pub mod nav;
+pub mod outputs;
 pub mod pages;
 pub mod panel;
 pub mod preset;
