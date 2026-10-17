@@ -2,6 +2,7 @@
 //! keyboard into keystrokes (and MMC messages), so they become usable in your
 //! software of choice. Rust port of `komplement.c`.
 
+use std::path::Path;
 use std::process::exit;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -17,6 +18,7 @@ use kontrol_rs::hid::Hid;
 use kontrol_rs::hid_dump::Dump;
 use kontrol_rs::leds::Leds;
 use kontrol_rs::mapping::MappingTable;
+use kontrol_rs::settings::Settings;
 use kontrol_rs::studio::{Page, Size};
 use kontrol_rs::uinput::Keyboard;
 use kontrol_rs::GetOpt;
@@ -30,7 +32,7 @@ extern "C" fn handle_interrupt(_signal: libc::c_int) {
 
 /// The options the parser accepts, in `getopt` notation. The usage text and the
 /// parser must agree; a test below checks that they do.
-const SHORT_OPTIONS: &str = "hv:p:m:o:qnsxdhalS:X:T:";
+const SHORT_OPTIONS: &str = "hv:p:m:o:c:qnsxdhalS:X:T:";
 
 fn print_usage(argv0: &str) {
     println!("{}", usage_text(argv0));
@@ -52,6 +54,14 @@ Options:
 
  -o /path/to/uinput   The path to uinput device file ({DEFAULT_UINPUT_PATH}).
  -m /path/to/mapping  The path to mapping file (required to be useful).
+ -c /path/to/settings The settings file to read. Without -c,
+                      $XDG_CONFIG_HOME/komplement/config (usually
+                      ~/.config/komplement/config) is read if it is there; an
+                      absent default file is normal, but a path given with -c
+                      must exist. The file holds one `key = value` per line:
+                      vid, pid, uinput, mapping and mcu (the port the DAW's
+                      surface writes to). What it says is used where the command
+                      line said nothing.
  -a                   Do not create ALSA MIDI output port for MMC messages.
  -n                   Do not animate the buttons when starting/stopping.
 
@@ -84,8 +94,13 @@ Options:
  -X <port>            Draw what a DAW reports over Mackie Control Universal,
                       live. <port> names the port its control surface writes to,
                       as an address (14:0) or a piece of its name (\"Midi Through\",
-                      quote it); -X alone with a miss prints the list to choose
-                      from. The display is taken over for the run and given back
+                      quote it); -X auto looks for it instead, and so does a name
+                      that matches nothing. The search takes the only port that
+                      can be the surface (never ours, never the keyboard's own
+                      MIDI port); when several could be it, the settings file
+                      decides (mcu = ...), and failing that the list of ports is
+                      printed to choose from. The display is taken over for the
+                      run and given back
                       on the way out; nothing is ever sent to the DAW. With
                       -S page-track:large the page and the glyph size are chosen
                       (default: page-track at medium). The two page buttons turn
@@ -102,6 +117,12 @@ Options:
 Advanced options:
  -p <productId>       USB product ID (in case you want to try other hardware).
  -v <vendorId>        USB vendor ID (in case you want to try other hardware).
+
+Without -v/-p, and with nothing in the settings file, the keyboard is found by
+itself: the only device of the family this tool knows (the A-series ids above),
+or the first one when several are attached - which is then said out loud,
+because taking the first of several is a guess. Whatever it picks is reported,
+so a model this list does not know yet is one `pid = ...` line away.
 
 {RISK_DISCLAIMER}"
     )
@@ -170,13 +191,17 @@ fn main() {
 
     let mut vid = DEFAULT_VID;
     let mut pid = DEFAULT_PID;
+    let mut vid_given = false;
+    let mut pid_given = false;
     let mut animate = true;
     let mut quiet = false;
     let mut midi_controller = true;
     let mut dump_packets = false;
     let mut screen_takeover = false;
     let mut uinput_path = DEFAULT_UINPUT_PATH.to_string();
+    let mut uinput_given = false;
     let mut mapping_path: Option<String> = None;
+    let mut settings_path: Option<String> = None;
     let mut list_devices = false;
     let mut screen_probe = false;
     let mut screen_state: Option<String> = None;
@@ -195,10 +220,20 @@ fn main() {
                 print_usage(&argv0);
                 return;
             }
-            'v' => vid = i32::from_str_radix(value.trim_start_matches("0x"), 16).unwrap_or(vid),
-            'p' => pid = i32::from_str_radix(value.trim_start_matches("0x"), 16).unwrap_or(pid),
+            'v' => {
+                vid = i32::from_str_radix(value.trim_start_matches("0x"), 16).unwrap_or(vid);
+                vid_given = true;
+            }
+            'p' => {
+                pid = i32::from_str_radix(value.trim_start_matches("0x"), 16).unwrap_or(pid);
+                pid_given = true;
+            }
             'm' => mapping_path = Some(value),
-            'o' => uinput_path = value,
+            'o' => {
+                uinput_path = value;
+                uinput_given = true;
+            }
+            'c' => settings_path = Some(value),
             'q' => quiet = true,
             'd' => dump_packets = true,
             'x' => screen_takeover = true,
@@ -231,6 +266,46 @@ fn main() {
         exit(1);
     }
 
+    // The settings file: what the command line did not say. A path named with
+    // -c has to be there; the default path being absent is a fresh install.
+    let (settings, settings_notes) = match settings_path.as_deref() {
+        Some(path) => match Settings::load_named(Path::new(path)) {
+            Ok(read) => read,
+            Err(message) => {
+                eprintln!("The settings file {message}");
+                exit(1);
+            }
+        },
+        None => match Settings::path() {
+            Some(path) => Settings::load(&path),
+            None => (Settings::default(), Vec::new()),
+        },
+    };
+    for note in &settings_notes {
+        eprintln!("Settings: {note}");
+    }
+
+    // The settings fill in what the command line left alone - never the other
+    // way round, so a flag always beats the file.
+    if !vid_given {
+        if let Some(id) = settings.vid {
+            vid = i32::from(id);
+        }
+    }
+    if !pid_given {
+        if let Some(id) = settings.pid {
+            pid = i32::from(id);
+        }
+    }
+    if !uinput_given {
+        if let Some(path) = &settings.uinput {
+            uinput_path = path.clone();
+        }
+    }
+    if mapping_path.is_none() {
+        mapping_path = settings.mapping.clone();
+    }
+
     let mut return_code = 0;
 
     // Listing devices is a stand-alone mode: no mapping file, no keyboard.
@@ -245,22 +320,78 @@ fn main() {
         return;
     }
 
+    // Which keyboard: the command line, then the settings file, then the only
+    // device of the family this tool knows - and when that last step is a guess
+    // between several, the note says so, because a choice nobody can see is a
+    // choice nobody can correct. The ids it settles on are what every open below
+    // uses, so nothing else has to know how they were found.
+    let named_pair = (vid_given || pid_given).then(|| (vid as u16, pid as u16));
+    let configured_pair =
+        (settings.vid.is_some() || settings.pid.is_some()).then(|| (vid as u16, pid as u16));
+    let mut keyboard: Option<kontrol_rs::hid::DeviceSummary> = None;
+    match kontrol_rs::hid::list_devices() {
+        Ok(devices) => match kontrol_rs::presence::choose_keyboard(
+            &devices,
+            named_pair,
+            configured_pair,
+            DEFAULT_VID as u16,
+        ) {
+            Ok((device, _source, notes)) => {
+                vid = i32::from(device.vendor_id);
+                pid = i32::from(device.product_id);
+                for note in &notes {
+                    eprintln!("Keyboard: {note}");
+                }
+                keyboard = Some(device);
+            }
+            Err(message) => {
+                eprintln!("{message}");
+                exit(1);
+            }
+        },
+        // Enumeration itself failed: the open below will report it too.
+        Err(reason) => eprintln!("Could not list HID devices: {reason}"),
+    }
+    let keyboard_name = keyboard
+        .as_ref()
+        .and_then(|device| device.product.clone());
+
     // `-X`: draw what a DAW reports over MCU, live, on the panel. Stands alone
     // like the other display modes - no mapping file, no keystrokes - and takes
     // the display over for the run. This is the decoder seen on hardware; the
     // daemon (step 4 of doc/display-interface.md) is what keeps it.
-    if let Some(port) = mcu_input {
+    if let Some(port_argument) = mcu_input {
         let (page, size) = kontrol_rs::live::page_and_size(
             screen_state.as_deref().unwrap_or(""),
             Page::Track,
             Size::Medium,
         );
+        // The port is settled before the keyboard is even opened, so a name that
+        // finds nothing cannot disturb the panel, and so the search happens
+        // where its notes and its error are still readable.
+        let chosen = match kontrol_rs::mcu_port::ports().and_then(|ports| {
+            kontrol_rs::presence::choose_daw_port(
+                &ports,
+                Some(&port_argument),
+                settings.mcu.as_deref(),
+                keyboard_name.as_deref(),
+            )
+        }) {
+            Ok((port, _source, notes)) => {
+                for note in &notes {
+                    eprintln!("DAW port: {note}");
+                }
+                port
+            }
+            Err(message) => {
+                println!("{message}");
+                exit(1);
+            }
+        };
+
         match Hid::open(vid as u16, pid as u16) {
             Ok(hid) => {
-                // The port is opened before the display is taken over, so that a
-                // name that matches nothing is reported without the panel
-                // flickering into our hands first.
-                let input = match kontrol_rs::mcu_port::McuInput::open(&port) {
+                let input = match kontrol_rs::mcu_port::McuInput::open_chosen(&chosen) {
                     Ok(input) => input,
                     Err(message) => {
                         println!("{message}");

@@ -50,6 +50,10 @@ screens, kept as `-S nav` states until the pages have been judged on hardware). 
 two together - listen, decode, draw - as `komplement -X <port>`, and `doc/display-interface.md`
 works out how a DAW is meant to feed them.
 
+Two more that are not about the display: `src/settings.rs` (the tool's own settings file:
+`vid`, `pid`, `uinput`, `mapping`, `mcu`) and `src/presence.rs` (finding the keyboard and the
+DAW's port instead of being told, and saying so when that step is a guess).
+
 ## Building
 
 With NixOS (or any machine with Nix):
@@ -74,10 +78,11 @@ konfigure -q -p presets/basic_cc.pst > my_template.syx   # send it to the keyboa
 ```
 
 `komplement` options: `-m <mapping>` (required to be useful), `-p <productId>`, `-v <vendorId>`,
-`-o <uinput path>`, `-a` (no ALSA port), `-n` (no LED animation), `-q` (quiet), `-d` (dump HID
-reports), `-l` (list the HID devices the system exposes and exit), `-s` (probe the keyboard's
-display), `-x` (take the display over for a capture), `-S <state>` (draw one named state),
-`-h`.
+`-o <uinput path>`, `-c <settings file>`, `-a` (no ALSA port), `-n` (no LED animation), `-q`
+(quiet), `-d` (dump HID reports), `-l` (list the HID devices the system exposes and exit), `-s`
+(probe the keyboard's display), `-x` (take the display over for a capture), `-S <state>` (draw one
+named state), `-X <port>` (draw what a DAW reports over Mackie Control, live; `-X auto` searches
+for the port), `-T <format>` (how to read the DAW's time display in `-X`), `-h`.
 `konfigure` options: `-p <preset>`, `-o <file>`, `-m <alsa port>`, `-q`, `-h`.
 
 `komplement -l` needs neither a mapping file nor the keyboard: it prints every HID device the
@@ -192,6 +197,52 @@ entry left by `setfacl -m u:<user>:w` (write only, no read) makes the open fail 
 mask, not the group's rights, so `ls -l` is misleading). Clear leftovers with
 `sudo setfacl -b /dev/uinput && sudo chmod 660 /dev/uinput`; the udev rule
 (`GROUP="audio"`, `MODE="0660"`) gives the group everything that is needed.
+
+## Settings file
+
+`komplement` reads one settings file, and what it says is used where the command line said
+nothing - a flag always beats the file, never the other way round:
+
+```sh
+komplement -m mappings/reaper.map     # everything else is found by itself
+komplement -c /etc/komplement/config  # or name the file yourself
+```
+
+Without `-c` the file is `$XDG_CONFIG_HOME/komplement/config`, usually
+`~/.config/komplement/config`. It being absent is normal (a fresh install runs on the defaults);
+a path given with `-c` that is not there is an error, because that is a typo and not a default.
+One `key = value` per line, `#` starts a comment, and a value may be quoted to hold a space:
+
+```text
+# the keyboard: the A25 is 1730, the A49 is 1740
+pid = 1740
+# the port the DAW's control surface writes to (see -l and -X)
+# mcu = Midi Through
+# mapping = /home/andy/projects/RUST/kontrol-rs/mappings/reaper.map
+# uinput = /dev/uinput
+```
+
+A key that is not known, or a value that does not parse, is *reported and skipped* and the
+default stays in place: a service that quietly ignores half its settings is worse than one that
+refuses to start.
+
+The keyboard and the DAW's port are both *found*, not passed in:
+
+- **the keyboard** - `-v`/`-p` (either of them pins the pair), else the settings file, else the
+  only device of the family this tool knows (`1730`, `1740`). One keyboard shows up as several HID
+  interfaces, and several *interfaces* are not several *keyboards*; if several models really are
+  attached, the first is used **and that is said out loud**, because a guess nobody can see is a
+  guess nobody can correct. Nothing attached is an error that lists what was seen and how to name
+  a model this list does not know yet (`pid = ...`).
+- **the DAW's port** (`-X`) - the argument first (an address like `14:0`, or a piece of a name);
+  if that finds nothing, or with `-X auto`, the *only* port that can be the surface is taken:
+  never our own port, never ALSA's own clients, never the keyboard's own MIDI port. If several
+  could be it, the settings file decides (`mcu = ...`), and failing that the ports are listed
+  together with the line that pins the answer.
+
+This is the *finding* half of the service that is planned; the service itself - one program with
+keystrokes and panel, the panel in a task of its own that is restarted when it fails - is the
+next step, and `doc/display-interface.md` keeps that plan.
 
 ## Mapping files
 

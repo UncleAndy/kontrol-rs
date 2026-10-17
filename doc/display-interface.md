@@ -96,6 +96,8 @@ While the daemon runs, it owns the display: `a0 03 04` after opening the device,
 
 `komplement` (keystrokes) and the daemon can read the same HID interface at the same time. The one collision there was is settled: `mappings/reaper.map` no longer maps **Page Left** or **Page Right** at all, so the two buttons belong to the daemon alone and one press cannot both page the screen and toggle mute in the DAW. (They used to be mapped as Alt+M and Alt+Shift+S under the inherited names Mute and Solo, which this keyboard does not have.)
 
+**Decided with the owner:** the two halves become **one program** - keystrokes, MIDI-mode switching and the panel in one service - because the panel is a *write* to the same device the keystrokes are read from, and two processes would have to agree on who owns it. In that one program the panel runs in a task of its own: **if it fails it is restarted**, and a failure there never takes the keystrokes with it. While no DAW is connected the panel stays ours and says so (`Ждём DAW`) instead of going back to Native Instruments, and there is deliberately **no** way to hand it back at runtime (asked about and declined). Before any of that, the things the program needs are *found* rather than passed in: the keyboard and the DAW's port (see `src/presence.rs`, `src/settings.rs` and the settings-file section of `README.md`).
+
 ## Redraw policy
 
 - a frame is 512 bytes in two 265-byte reports;
@@ -110,7 +112,8 @@ Each step is verifiable on the panel before the next one starts:
 1. **done** - the model and the four pages, rendered from a canned state: the screen, the sizes and the paging can be judged with no DAW involved at all (`src/studio.rs`, `src/pages.rs`, the `page-*` states of `-S`);
 2. **done** - the capture and the decoder that fills `Studio` from it, opcodes measured rather than guessed: `src/mcu.rs` turns the DAW's bytes into the state, `tests/mcu_capture.rs` feeds it a slice of the real stream (`tests/fixtures/mcu-reaper.txt`, cut out with `tools/mcu-slice.awk`), and opening the port itself is left to the daemon in step 4, so nothing here needs hardware to be verified. The capture is `tools/capture-mcu.sh` (listen to the surface's port with `aseqdump`, walk play/stop, track selection, mute/solo/arm, volume, click/loop, a bank change, a rename, a tempo change and a quiet period, each step marked on the monotonic clock); its log is the only source for the decoder, exactly as the keyboard's own protocol was measured before it was coded;
 3. the FIFO reader and the message overlay;
-4. the daemon: ownership, paging, sizes, the redraw policy, run by hand at first, as a systemd unit later. Until it exists, `komplement -X <port>` already draws the decoder's state on the panel, live: one page to begin with, all four reachable with the page buttons, the sizes with SHIFT, and no messages (see the section above).
+4. **done** - *finding* what the service needs, before anything can be kept: the keyboard is found by its family (or by `-v`/`-p`, or by the settings file), and the DAW's port is searched for (`-X auto`) instead of being hard-coded - the command line first, then the search, then the settings file, and a guess between several candidates is said out loud rather than made quietly. `src/presence.rs`, `src/settings.rs`, `-c <path>`;
+5. the service: one program with both halves, the panel in a task of its own that is restarted when it fails and never takes the keystrokes with it, the panel ours with `Ждём DAW` while no DAW is there, plus ownership, paging, sizes and the redraw policy; run by hand at first, as a systemd unit later. Until it exists, `komplement -X <port>` already draws the decoder's state on the panel, live: all four pages reachable with the page buttons, the sizes with SHIFT, and no messages (see the section above).
 
 ## Seeing the decoder before the daemon exists
 
@@ -130,5 +133,5 @@ What makes it checkable off the hardware is that the parts are separable: the st
 - No pixels, no fonts, no text protocol over the wire: the DAW never draws.
 - No ReaScript, no Lua, no per-project installation.
 - No OSC in the first version (it is the fallback if tempo or meters turn out to be needed).
-- No message history, no logging to disk, no configuration file beyond the FIFO path.
+- No message history, no logging to disk, and no configuration beyond the tool's own settings file (what discovery needs: `vid`, `pid`, `uinput`, `mapping`, `mcu`) and the FIFO path.
 - Nothing in this interface depends on the fourth page's contents, on meters, or on tempo, so those can be decided later without redoing the rest.

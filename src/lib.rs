@@ -24,6 +24,15 @@
 //! | [`uinput`] | `uinput_stuff.c` (device) |
 //! | [`alsa_seq`] | `alsa.c` |
 //! | [`preset`] | `konfigure_parser.c` + the SysEx layout |
+//!
+//! New in the port, with no C counterpart:
+//!
+//! | Rust | what it is |
+//! |---|---|
+//! | [`settings`] | the tool's own settings file (`vid`, `pid`, `mcu`, ...) |
+//! | [`presence`] | finding the keyboard and the DAW's port |
+//! | [`mcu`], [`mcu_port`], [`studio`], [`pages`], [`timecode`] | the panel: the DAW's Mackie Control output, drawn on the keyboard's screen |
+//! | [`live`] | the panel and the keyboard run together (`-X`) |
 
 pub mod alsa_seq;
 pub mod buttons;
@@ -44,7 +53,9 @@ pub mod mmc;
 pub mod nav;
 pub mod pages;
 pub mod preset;
+pub mod presence;
 pub mod screen;
+pub mod settings;
 pub mod studio;
 pub mod timecode;
 pub mod uinput;

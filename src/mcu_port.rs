@@ -170,6 +170,12 @@ impl McuInput {
         McuInput::open_on(&chosen)
     }
 
+    /// Subscribes to a port that [`crate::presence`] has already picked - the
+    /// way in for the caller that searched instead of being told.
+    pub fn open_chosen(chosen: &Port) -> Result<McuInput, String> {
+        McuInput::open_on(chosen)
+    }
+
     fn open_on(chosen: &Port) -> Result<McuInput, String> {
         // Non-blocking, because the reader is not allowed to wait: the caller has
         // a keyboard to look at in between the DAW's messages, and a stopped DAW
