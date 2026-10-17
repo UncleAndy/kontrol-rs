@@ -218,6 +218,77 @@ fn a_writer_that_comes_back_under_the_same_name_is_listened_to_again() {
     assert!(decoder.studio().bank[1].mute, "the mute LED of the second strip");
 }
 
+/// The mode where the DAW writes straight to us: our own port is both the way in
+/// and the way out, and nothing at all is subscribed to. This is the shape a
+/// surface has to a DAW, and what `mcu = self` means - so the reading half has
+/// to work when nobody is subscribed to anything.
+#[test]
+fn self_mode_reads_what_the_daw_writes_into_our_port() {
+    if !sequencer_available() {
+        println!(
+            "No /dev/snd/seq on this machine, so there is no sequencer to test against.\n\
+             This test needs ALSA and does nothing without it - run `cargo test` where the\n\
+             keyboard and the live view live, and it checks the self mode there."
+        );
+        return;
+    }
+
+    let mut input =
+        McuInput::open_self().expect("our own port, subscribing to nothing at all");
+    assert!(input.is_self(), "our own port is what we listen to");
+    assert_eq!(
+        input.port(),
+        input.source().port,
+        "the port we read from is the port we were given"
+    );
+
+    // A DAW, standing in: it writes into our port, which is what Reaper does
+    // when the Mackie Control input and output are both set to us.
+    let daw = Seq::open(None, None, false).expect("a sequencer to write from");
+    daw.set_client_name(&CString::new("kontrol-rs test DAW").expect("a name"))
+        .expect("naming the client");
+    let daw_port = daw
+        .create_simple_port(
+            &CString::new("DAW out").expect("a name"),
+            PortCap::READ | PortCap::SUBS_READ,
+            PortType::MIDI_GENERIC | PortType::APPLICATION,
+        )
+        .expect("the stand-in DAW's port");
+    let subs = alsa::seq::PortSubscribe::empty().expect("a subscription");
+    subs.set_sender(alsa::seq::Addr {
+        client: daw.client_id().expect("a client id"),
+        port: daw_port,
+    });
+    subs.set_dest(alsa::seq::Addr {
+        client: input.own_client().expect("our client id"),
+        port: input.port(),
+    });
+    daw.subscribe_port(&subs).expect("the DAW writing to us");
+
+    // A level, the way a surface's fader moves it.
+    send(&daw, daw_port, &fader_message(0, 0.5));
+
+    let mut decoder = Decoder::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut messages = 0;
+    while std::time::Instant::now() < deadline && messages == 0 {
+        messages += input
+            .read_into(&mut decoder)
+            .expect("reading what the DAW wrote to us")
+            .messages;
+        if messages == 0 {
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    assert_eq!(messages, 1, "the DAW's fader move should arrive at our port");
+    let fader = decoder.studio().bank[0].fader;
+    assert!(
+        (fader - 0.5).abs() < 0.001,
+        "the level arrived as {fader}, not as the 0.5 that was sent"
+    );
+}
+
 /// What a surface says *back*: `send` on our own port reaches whoever subscribed
 /// to it - which is what a DAW's Mackie Control *input* does when it is pointed
 /// at us, and the way the first knob moves the current track's level.

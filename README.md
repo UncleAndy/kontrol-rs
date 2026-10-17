@@ -246,6 +246,12 @@ differently - `knobs.rs`.
 
 ### When the DAW runs on PipeWire or JACK
 
+The surface can be the only device the DAW needs: **its MIDI input *and* its MIDI output are our port**.
+The DAW writes into it (the display, the LEDs, the fader echoes, which we read) and reads from it (the
+knob's level moves). That is what `mcu = self` - or `-X self` - means, and it is the setting to prefer on
+a PipeWire or JACK machine: there is no second port to find, no `Midi Through` and no `snd-seq-dummy` to
+be present, and nothing can arrive back at the DAW's input through a loopback.
+
 A DAW that takes its MIDI from the PipeWire/JACK graph cannot see an ALSA sequencer port that presents
 itself as a mere application: what gets published to that graph is decided by the port's declared type,
 and a port that says `APPLICATION` alone is left out, while the ports the DAW already knew (`Midi
@@ -259,8 +265,11 @@ the thing a DAW reads as an input - only for a port that is readable, and a sour
 the one direction no DAW reads. Bidirectional is what a real surface is, too.
 
 Start the tool *before* the DAW, or reset the DAW's MIDI device list afterwards: it is read once, at
-start-up. In the Mackie Control surface's settings, the MIDI **input** is our port and the output stays
-where it is - that one is the display.
+start-up.
+
+The older way still works and is what to use when the DAW writes to a port of its own choosing: name it
+(`mcu = Midi Through`, `-X auto`) and the tool subscribes to it, while its own port carries what it says
+back.
 
 ## Settings file
 

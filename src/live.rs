@@ -177,12 +177,20 @@ pub fn run(
     volume_step_shift: f32,
 ) -> Result<(), String> {
     if !quiet {
-        println!(
-            "Listening for Mackie Control Universal messages from {}; our own port is {} ({} input).",
-            input.source().describe(),
-            input.port(),
-            crate::mcu_port::CLIENT_NAME
-        );
+        if input.is_self() {
+            println!(
+                "The DAW writes straight into our own port - {} ({} input) - so set the Mackie Control surface's MIDI *input* and *output* both to it, and no `Midi Through` is involved at all.",
+                input.port(),
+                crate::mcu_port::CLIENT_NAME
+            );
+        } else {
+            println!(
+                "Listening for Mackie Control Universal messages from {}; our own port is {} ({} input).",
+                input.source().describe(),
+                input.port(),
+                crate::mcu_port::CLIENT_NAME
+            );
+        }
         println!(
             "For the knobs to reach the DAW, the Mackie Control surface's MIDI *input* must be {} - its output stays where it is, that is the display.",
             crate::mcu_port::CLIENT_NAME

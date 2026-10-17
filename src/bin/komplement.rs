@@ -334,23 +334,35 @@ fn main() {
         // The port is settled before the keyboard is even opened, so a name that
         // finds nothing cannot disturb the panel, and so the search happens
         // where its notes and its error are still readable.
-        let chosen = match kontrol_rs::mcu_port::ports().and_then(|ports| {
-            kontrol_rs::presence::choose_daw_port(
-                &ports,
-                Some(&port_argument),
-                settings.mcu.as_deref(),
-                keyboard_name.as_deref(),
-            )
-        }) {
-            Ok((port, _source, notes)) => {
-                for note in &notes {
-                    eprintln!("DAW port: {note}");
+        // `self` is the mode where the DAW writes straight to us: there is no
+        // port to search for, because the port is ours.
+        let writes_to_us = port_argument.trim().eq_ignore_ascii_case(kontrol_rs::mcu_port::SELF_NAME)
+            || settings
+                .mcu
+                .as_deref()
+                .map(|name| name.trim().eq_ignore_ascii_case(kontrol_rs::mcu_port::SELF_NAME))
+                .unwrap_or(false);
+        let chosen = if writes_to_us {
+            None
+        } else {
+            match kontrol_rs::mcu_port::ports().and_then(|ports| {
+                kontrol_rs::presence::choose_daw_port(
+                    &ports,
+                    Some(&port_argument),
+                    settings.mcu.as_deref(),
+                    keyboard_name.as_deref(),
+                )
+            }) {
+                Ok((port, _source, notes)) => {
+                    for note in &notes {
+                        eprintln!("DAW port: {note}");
+                    }
+                    Some(port)
                 }
-                port
-            }
-            Err(message) => {
-                println!("{message}");
-                exit(1);
+                Err(message) => {
+                    println!("{message}");
+                    exit(1);
+                }
             }
         };
 
@@ -380,7 +392,11 @@ fn main() {
 
         match Hid::open(vid as u16, pid as u16) {
             Ok(hid) => {
-                let input = match kontrol_rs::mcu_port::McuInput::open_chosen(&chosen) {
+                let opened = match chosen.as_ref() {
+                    Some(chosen) => kontrol_rs::mcu_port::McuInput::open_chosen(chosen),
+                    None => kontrol_rs::mcu_port::McuInput::open_self(),
+                };
+                let input = match opened {
                     Ok(input) => input,
                     Err(message) => {
                         println!("{message}");

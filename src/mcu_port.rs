@@ -24,6 +24,11 @@ use alsa::seq::{
 /// The name our own client carries, so the user can see who is listening.
 pub const CLIENT_NAME: &str = "KOMPLEMENTARY MCU IN";
 
+/// The name that means "the DAW writes straight into our own port": the setting
+/// `mcu = self`, or `-X self`. A word rather than a port name, because there is
+/// no port to look for - the port is ours.
+pub const SELF_NAME: &str = "self";
+
 /// ALSA's own announce port: `System:Announce`, client 0 port 1. Subscribing to
 /// it is the only way to be *told* that a port or a client appeared or went
 /// away - and a subscription to a client that died is dead and silent, so
@@ -261,17 +266,43 @@ pub struct McuInput {
 impl McuInput {
     /// Finds `wanted` among everything ALSA knows about and subscribes to it.
     pub fn open(wanted: &str) -> Result<McuInput, String> {
+        if wanted.trim().eq_ignore_ascii_case(SELF_NAME) {
+            return McuInput::open_self();
+        }
         let chosen = choose(wanted, &ports()?)?;
-        McuInput::open_on(&chosen)
+        McuInput::open_on(Some(&chosen))
     }
 
     /// Subscribes to a port that [`crate::presence`] has already picked - the
     /// way in for the caller that searched instead of being told.
     pub fn open_chosen(chosen: &Port) -> Result<McuInput, String> {
-        McuInput::open_on(chosen)
+        McuInput::open_on(Some(chosen))
     }
 
-    fn open_on(chosen: &Port) -> Result<McuInput, String> {
+    /// The mode where the DAW writes straight into our own port: there is
+    /// nothing to subscribe to, because the port is ours and the DAW has been
+    /// pointed at it.
+    ///
+    /// This is what a surface is to a DAW - one device, both directions - and it
+    /// takes `Midi Through` out of the picture: no dummy driver to be present,
+    /// no port of another program to find by name, and no chance of the DAW's
+    /// own output arriving back at its input through a loopback.
+    pub fn open_self() -> Result<McuInput, String> {
+        McuInput::open_on(None)
+    }
+
+    /// Our own ALSA client id: who to address when writing *to* us. Asked of the
+    /// sequencer rather than remembered, so there is only one source of truth.
+    pub fn own_client(&self) -> Option<i32> {
+        self.seq.client_id().ok()
+    }
+
+    /// Whether this handle is in that mode: our own port is what we listen to.
+    pub fn is_self(&self) -> bool {
+        self.source.port == self.port
+    }
+
+    fn open_on(chosen: Option<&Port>) -> Result<McuInput, String> {
         // Non-blocking, because the reader is not allowed to wait: the caller has
         // a keyboard to look at in between the DAW's messages, and a stopped DAW
         // sends nothing at all. `read_into` takes the whole queue either way.
@@ -320,21 +351,27 @@ impl McuInput {
             )
             .map_err(|err| err.to_string())?;
 
-        // The DAW's port first: without it there is nothing to listen to.
+        // Our own port, which is what we read from when the DAW writes straight
+        // to us: ALSA's list is the authority on its own numbers, so it is asked
+        // rather than guessed.
+        let ours = seq.client_id().ok().and_then(|client| {
+            ports_with(&seq)
+                .ok()
+                .and_then(|ports| {
+                    ports
+                        .into_iter()
+                        .find(|candidate| candidate.client == client && candidate.port == port)
+                })
+        });
+
         let mut input = McuInput {
             seq,
             port,
-            source: chosen.clone(),
+            source: ours.ok_or_else(|| format!("our own port {port} is not in ALSA's list"))?,
             announce_error: None,
         };
-        input
-            .connect(Addr {
-                client: chosen.client,
-                port: chosen.port,
-            })
-            .map_err(|err| format!("could not subscribe to {}: {err}", chosen.describe()))?;
 
-        // …and then ALSA's announce port, so that a *restart* of the DAW can be
+        // …then ALSA's announce port, so that a *restart* of the DAW can be
         // noticed while the run goes on. Optional on purpose: losing it costs
         // promptness, not the listener, so it is reported rather than fatal.
         if let Err(reason) = input.connect(Addr {
@@ -342,6 +379,19 @@ impl McuInput {
             port: ANNOUNCE_PORT,
         }) {
             input.announce_error = Some(reason);
+        }
+
+        // The DAW's own port, when there is one to listen to: subscribing is
+        // what makes a DAW that writes somewhere else (to `Midi Through`, to a
+        // hardware surface's loop) reach us. In self mode there is none.
+        if let Some(chosen) = chosen {
+            input.source = chosen.clone();
+            input
+                .connect(Addr {
+                    client: chosen.client,
+                    port: chosen.port,
+                })
+                .map_err(|err| format!("could not subscribe to {}: {err}", chosen.describe()))?;
         }
 
         Ok(input)
