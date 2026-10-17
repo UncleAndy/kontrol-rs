@@ -2,7 +2,7 @@
 
 **Status:** design, agreed with the owner. Everything marked *measured* comes from `doc/Captured_Codes.md`; everything marked *open* is a question that a capture or a run has to answer before code depends on it.
 
-**Step 1 is in place:** the state and the four pages are drawn (`src/studio.rs` for the state, `src/pages.rs` for the layout) and can be looked at on the panel with `komplement -S page-track:large` and its three siblings, at any of the three sizes, with no DAW involved at all. The sources below are not built yet.
+**Steps 1 and 2 are in place:** the state and the four pages are drawn (`src/studio.rs` for the state, `src/pages.rs` for the layout), and the MCU half of the state is filled by `src/mcu.rs` from a real capture - checked against the DAW's own bytes by `tests/mcu_capture.rs` and the fixture it reads. The pages can be looked at on the panel with `komplement -S page-track:large` and its three siblings, at any of the three sizes, with no DAW involved at all. Nothing opens a port yet: the daemon owns that, in step 4, and the FIFO half is step 3.
 
 ## Why the DAW cannot simply write text
 
@@ -24,10 +24,10 @@ A page is a function of the state and the chosen glyph size; the screen is a pag
 
 Reaper's *Mackie Control Universal* control surface is switched on in Preferences -> Control/OSC/Web -> **Add -> Mackie Control Universal**, pointed at a MIDI output, and then it feeds that port by itself, with no script and no ReaScript:
 
-- track names in the LCD SysEx blocks (about six or seven characters per track, eight tracks per bank);
-- the position/time display, in its own SysEx;
-- transport state as note messages (the same ones that light a real MCU's LEDs), faders and pans as CC;
-- the eight mute/solo states of the bank as note messages again.
+- track names in the LCD SysEx blocks: seven characters per channel, eight channels per bank;
+- the transport state, and the loop and click LEDs, as note messages - the same ones that light a real MCU's LEDs - and the channel rows of arm, solo, mute and select the same way;
+- fader positions as **pitch bend**, one message per channel, 14 bits, the ninth being the master, and the meter levels as channel aftertouch;
+- and **not** the position, and **not** pan: the capture has no position SysEx at all and no pan controller anywhere, so a pan display has no source and the time is still a gap. The twelve-character display on controllers 64..75 is the only candidate for a time, and it is not decoded yet.
 
 This is one-way listening: we never answer and never send, so we cannot disturb Reaper's handling of the surface.
 
@@ -35,7 +35,7 @@ Why it is the right first channel: nothing has to be installed in the DAW and no
 
 Its limits, stated plainly: MCU carries MCU's own vocabulary and no arbitrary text (that is what the FIFO is for); names arrive eight tracks at a time, so a list of more tracks needs us to send bank-up/bank-down notes back; **tempo is not in MCU at all**, so a tempo field would need OSC or a script - moot, since it is not wanted on the screen; and SysEx has to actually pass through the port, which on Linux is not a given and is to be verified before anything relies on track names.
 
-The exact opcodes are **open**: they will be read from a capture of Reaper's MCU output on a virtual port, the same way the keyboard's own protocol was measured. Nothing in this interface is guessed from documentation alone.
+The opcodes are no longer a guess: they were measured from a capture of Reaper's own output (`tools/capture-mcu.sh`, the log kept in `kk-mcu-20261017-032907`, the facts written up in `doc/Captured_Codes.md`), and `src/mcu.rs` decodes exactly what that capture contains. What the capture did *not* contain matters as much as what it did - the position and pan above are the two things missing from it.
 
 ## Source 2: FIFO (messages)
 
@@ -60,7 +60,9 @@ Plain data, filled field by field by whichever source knows that field, so a mis
 - the current MCU bank: its eight tracks with their fader and pan positions and their mute/solo states;
 - per-field freshness: which source wrote it and when, so the screen can show "as of when" and a dead source is visible rather than silently stale. Not in the state yet: it arrives with the MCU decoder (step 2), because with no sources there is nothing to date.
 
-**Open:** whether MCU reports meters at all, and in what form; whether the daemon has to answer MCU's device-query (some DAWs want a reply before they consider a surface alive; Reaper usually does not); how many tracks the bank view should be able to step through.
+**Answered by the capture:** meters do arrive, as channel aftertouch, one per channel, and the decoder keeps them (`Decoder::levels`) though no page reads them yet; the bank is eight channels, and the second bank in the capture starts eight tracks later, so eight is the step size; SysEx does pass through on this host, because the names arrived.
+
+**Still open:** where the position comes from (the twelve-character display on controllers 64..75 is the candidate, not decoded yet); whether pan is worth having, since no source knows it; the record LED (95 is assumed: nothing in the capture engaged record); which of notes 86 and 89 is the loop and which the click (both lit in the step where the two were toggled, and only 86 follows MCU's own LED map); whether the daemon has to answer MCU's device-query (some DAWs want a reply before they consider a surface alive; Reaper usually does not); and one question the capture raised: Reaper wrote the seven names it sent at LCD offsets 7, 14 ... 49, while offset 0 carried its own announcement line - one cell away from the strip LEDs, which number the first channel zero. Whether the first channel's name is written elsewhere, or whether the surface's first cell belongs to the announcement, is not settled.
 
 ## Messages
 
@@ -104,7 +106,7 @@ While the daemon runs, it owns the display: `a0 03 04` after opening the device,
 Each step is verifiable on the panel before the next one starts:
 
 1. **done** - the model and the four pages, rendered from a canned state: the screen, the sizes and the paging can be judged with no DAW involved at all (`src/studio.rs`, `src/pages.rs`, the `page-*` states of `-S`);
-2. a capture of Reaper's MCU output, then the decoder that fills `Studio` from it - opcodes measured, not guessed. The capture is `tools/capture-mcu.sh` (listen to the surface's port with `aseqdump`, walk play/stop, track selection, mute/solo/arm, volume, click/loop, a bank change, a rename, a tempo change and a quiet period, each step marked on the monotonic clock); its log is the only source for the decoder, exactly as the keyboard's own protocol was measured before it was coded;
+2. **done** - the capture and the decoder that fills `Studio` from it, opcodes measured rather than guessed: `src/mcu.rs` turns the DAW's bytes into the state, `tests/mcu_capture.rs` feeds it a slice of the real stream (`tests/fixtures/mcu-reaper.txt`, cut out with `tools/mcu-slice.awk`), and opening the port itself is left to the daemon in step 4, so nothing here needs hardware to be verified. The capture is `tools/capture-mcu.sh` (listen to the surface's port with `aseqdump`, walk play/stop, track selection, mute/solo/arm, volume, click/loop, a bank change, a rename, a tempo change and a quiet period, each step marked on the monotonic clock); its log is the only source for the decoder, exactly as the keyboard's own protocol was measured before it was coded;
 3. the FIFO reader and the message overlay;
 4. the daemon: ownership, paging, sizes, the redraw policy, run by hand at first, as a systemd unit later.
 

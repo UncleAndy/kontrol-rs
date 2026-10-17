@@ -43,7 +43,8 @@ keyboard required. `komplement`'s main loop is a thin wrapper around it.
 The port also has modules the C tool has no counterpart for, all of them for the keyboard's
 display: `src/screen.rs` (frames, reports and the drawing primitives), `src/font.rs` (the 5x7
 font), `src/font_medium.rs` (the 7x9 font), `src/studio.rs` (the state the screen shows and the
-pages it has), `src/pages.rs` (those pages) and `src/nav.rs` (the earlier drafts of the same
+pages it has), `src/pages.rs` (those pages), `src/mcu.rs` (the decoder that fills that state from a
+DAW's *Mackie Control Universal* output) and `src/nav.rs` (the earlier drafts of the same
 screens, kept as `-S nav` states until the pages have been judged on hardware). `doc/display-interface.md`
 works out how a DAW is meant to feed them.
 
@@ -135,8 +136,13 @@ matching timestamps; `doc/Captured_Codes.md` holds what they have measured so fa
 DAW's *Mackie Control Universal* surface writes to (with `aseqdump`, because a DAW's output is an ALSA
 sequencer port and `amidi` only reads rawmidi hardware) and walks through play/stop, track selection,
 mute/solo/arm, volume, click and loop, bank changes, a rename, a tempo change and a quiet period,
-stamping every event on the same clock as the step markers. Its log is what the MCU decoder will be
-written from - the opcodes are measured, never taken from documentation.
+stamping every event on the same clock as the step markers.
+
+One such log has been taken, and `tools/mcu-report.awk` files every event of it under the guided step
+it happened in. `tools/mcu-slice.awk` cuts a few interesting seconds out of it as raw MIDI bytes; that
+is what `tests/fixtures/mcu-reaper.txt` holds and what `tests/mcu_capture.rs` feeds to `src/mcu.rs`, so
+the decoder is checked against the DAW's own stream. Every opcode in the decoder was measured this way -
+none of them came from documentation.
 
 The keyboard needs read/write permission for the user running `komplement`, and `/dev/uinput`
 needs write permission for sending keystrokes. There is a NixOS module for that (below); the C

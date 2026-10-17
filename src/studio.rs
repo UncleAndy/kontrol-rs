@@ -241,7 +241,35 @@ pub struct Studio {
     pub bank_first_track: u16,
 }
 
+/// Channels in one MCU bank, which is how many the bank view holds.
+pub const BANK_CHANNELS: usize = 8;
+
 impl Studio {
+    /// An empty state: what the screen shows before a source has said anything.
+    /// The bank is there from the start, so a name that arrives later has a
+    /// place to land and the mixer page always has its eight columns.
+    pub fn empty() -> Studio {
+        Studio {
+            track_number: 1,
+            track_name: String::new(),
+            volume: String::new(),
+            volume_fraction: 0.0,
+            pan: String::new(),
+            pan_fraction: 0.5,
+            mute: false,
+            solo: false,
+            armed: false,
+            position: String::new(),
+            transport: Transport::Stopped,
+            looping: false,
+            click: false,
+            bank_first_track: 1,
+            bank: (0..BANK_CHANNELS)
+                .map(|_| Channel::new("", 0.0, false, false))
+                .collect(),
+        }
+    }
+
     /// A filled-in state for looking at the pages while no source is connected.
     /// Every field the pages use is set to something, so a layout mistake is
     /// visible on the panel rather than hidden behind a dash.

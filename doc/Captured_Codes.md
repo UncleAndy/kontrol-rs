@@ -179,7 +179,7 @@ Through port, as they should.
 * **Faders are pitch bend**, which is why they are easy to miss: one message per
   channel - midi channels 1..8 for the eight strip faders and channel 9 for the
   master - with a signed 14-bit value (`(value + 8192) / 128` is the familiar
-  0..127 position). All nine arrive as a burst every nine seconds, and that burst
+  0..127 position). All nine usually arrive together in a burst, and that burst
   is what the "Pitch bend x9" in every step of the report is; moving a fader
   loosens a smooth run instead (channel 4 walked 917, 1081, 1261, 1458 ... 4243
   while the third track's volume was moved with the mouse). So a fader position
@@ -189,5 +189,26 @@ Through port, as they should.
 * **Nothing at all for eight seconds while the DAW was idle** (the quiet step),
   so there is no periodic heartbeat to design around: the screen has to redraw
   when something arrives, and can sit still otherwise.
-* A few pitch bend messages (9..130 per step) come along - too few to belong to
-  the surface's own protocol. Not yet accounted for.
+
+### What the decoder does with it
+
+`src/mcu.rs` reads this stream and fills the screen's state message by message;
+`tests/mcu_capture.rs` feeds it a slice of the capture itself
+(`tests/fixtures/mcu-reaper.txt`, cut out of the log with `tools/mcu-slice.awk`),
+so the measurements above are what the tests assert rather than a comment about
+them. Two questions were settled on the way:
+
+* **The bank is eight channels, and the next bank starts eight tracks later.** The
+  bank-change step writes new names - `8 Synt`, `9 Othe`, `Vocal` - into the cells
+  that held `0 Lead`, `1 Back`, `2 Drum`, and clears the rest, which is what a bank
+  with three tracks left looks like. The names carry their own index, so the first
+  bank is tracks one to eight and the second starts at nine.
+* **The LCD cells do not line up with the strip LEDs**, and that is still to be
+  settled. The names arrived at offsets 7, 14 ... 49, while offset 0 carried
+  Reaper's own announcement (112 bytes, 18 times) and once a name, `7 Stri`. The
+  strip LEDs, on the other hand, number the first channel zero: selecting the
+  first three tracks lit notes 24, 25 and 26. So the name of the channel an LED
+  points at is not in the cell its index suggests. Either the surface's first cell
+  belongs to the announcement and the names start one cell later, or the project's
+  first track has no name that Reaper writes. Selecting the tracks of one bank one
+  after another would settle it in half a minute.

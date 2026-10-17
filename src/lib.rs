@@ -37,6 +37,7 @@ pub mod hid_dump;
 pub mod keys;
 pub mod leds;
 pub mod mapping;
+pub mod mcu;
 pub mod mmc;
 pub mod nav;
 pub mod pages;
