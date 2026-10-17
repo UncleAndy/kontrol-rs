@@ -78,6 +78,14 @@ impl Screen {
         self.last = Some(*frame);
         Some(screen::frame_reports(frame))
     }
+
+    /// Forget what the panel is showing, so the next frame is written in full.
+    /// Only one thing needs this: a panel that was unplugged and plugged back in
+    /// shows nothing knowable, and a frame it already had means one that is never
+    /// sent - the panel would stay dark while the state moved on.
+    pub fn forget(&mut self) {
+        self.last = None;
+    }
 }
 
 /// The panel's rate limit: at most twenty frames a second, as
@@ -110,6 +118,11 @@ impl Pace {
 /// Nothing is lost by waiting: the DAW's queue is drained in full each time round,
 /// and no message is older than this.
 const KEYBOARD_WAIT_MILLIS: i32 = 20;
+
+/// How often the keyboard is looked for again after it went away. Twice a
+/// second: quick enough to feel immediate, slow enough to cost nothing, since
+/// looking means enumerating the USB devices.
+pub const KEYBOARD_RETRY_MILLIS: u64 = 500;
 
 /// The buttons that turn the page, as `engine::button_mask` numbers them: the two
 /// page buttons are bits 14 and 15 of the mask (measured: bit 14 is Page Left and
@@ -193,7 +206,7 @@ pub fn page_and_size(state: &str, default_page: Page, default_size: Size) -> (Pa
 /// matches nothing is reported before the display is taken over: a typo should
 /// not make the panel flicker.
 pub fn run(
-    hid: &Hid,
+    hid: Hid,
     mut input: McuInput,
     page: Page,
     size: Size,
@@ -235,6 +248,18 @@ pub fn run(
     let mut waiting = false;
     let mut silent_overflows = 0usize;
     let mut report = [0u8; 64];
+    // The ids of the keyboard, which is what finds it again after an unplug: the
+    // handle itself is dead by then, the ids are not.
+    let ids = hid.ids();
+    // The keyboard belongs to this loop from here on: finding it again after it
+    // was unplugged means opening it again, which a borrowed handle cannot do.
+    let mut keyboard = Some(hid);
+    // Why the loop ended, when it ended for a reason.
+    let mut outcome: Result<(), String> = Ok(());
+    // When the keyboard was last looked for, and whether its absence has already
+    // been said out loud: the search runs twice a second, the report happens once.
+    let mut last_search = Instant::now();
+    let mut reported_absent = false;
 
     while !stop_requested() {
         // The DAW first: its whole queue goes into the state before anything is
@@ -282,12 +307,13 @@ pub fn run(
                         // the port is what to look at.
                         silent_overflows += 1;
                         if silent_overflows > SILENT_OVERFLOWS_BEFORE_GIVING_UP {
-                            return Err(format!(
+                            outcome = Err(format!(
                                 "the sequencer reported a full queue {silent_overflows} times without \
                                  delivering one message: nothing is reaching this port. Check that \
                                  the DAW's Control/OSC/Web surface writes to it ({}).",
                                 input.source().describe()
                             ));
+                            break;
                         }
                     }
                 } else {
@@ -299,22 +325,86 @@ pub fn run(
                 if stop_requested() {
                     break;
                 }
-                return Err(format!("while listening to the DAW: {message}"));
+                outcome = Err(format!("while listening to the DAW: {message}"));
+                break;
             }
         }
 
         // Then the keyboard, whose buttons turn the page. Waiting for a report is
         // also what paces this loop when the DAW has nothing to say: the DAW's
         // read does not wait for anything, so without this the loop would spin.
-        match hid.read_timeout(&mut report, KEYBOARD_WAIT_MILLIS) {
-            Ok(length) if length > 0 => {
-                paging.pressed(&report[..length]);
-            }
-            Ok(_) => {}
-            Err(message) => {
-                if !stop_requested() {
-                    return Err(format!("while reading the keyboard: {message}"));
+        //
+        // A keyboard that goes away is a state to wait out, not a reason to stop
+        // listening to the DAW: unplugging it takes the panel with it, because one
+        // device is both - so there is nothing to draw while it is gone, and it is
+        // not ours to say so on a panel that is not there. hidapi's own error text
+        // is no help ("hid_error is not implemented yet"), which is why the device
+        // list is asked instead: it needs no permission and answers the only
+        // question that matters, whether the keyboard is there at all.
+        let mut keyboard_gone: Option<String> = None;
+        match keyboard.as_ref() {
+            Some(device) => match device.read_timeout(&mut report, KEYBOARD_WAIT_MILLIS) {
+                Ok(length) if length > 0 => {
+                    paging.pressed(&report[..length]);
                 }
+                Ok(_) => {}
+                Err(message) => keyboard_gone = Some(message),
+            },
+            None => {
+                // Nothing to read from: give the loop a beat so the DAW keeps
+                // being served without spinning the processor, and look for the
+                // keyboard again twice a second.
+                std::thread::sleep(Duration::from_millis(KEYBOARD_WAIT_MILLIS as u64));
+                if last_search.elapsed() >= Duration::from_millis(KEYBOARD_RETRY_MILLIS) {
+                    last_search = Instant::now();
+                    match Hid::open(ids.0, ids.1) {
+                        Ok(device) => {
+                            // The panel's own memory went with the device, so it is
+                            // taken over again and the frame is written in full.
+                            let _ = device.write_raw(&[0xa0, 0x03, 0x04]);
+                            screen.forget();
+                            keyboard = Some(device);
+                            reported_absent = false;
+                            if !quiet {
+                                println!(
+                                    "The keyboard is back ({:04x}:{:04x}); the panel is being written to again.",
+                                    ids.0, ids.1
+                                );
+                            }
+                        }
+                        Err(_) => {
+                            // Not there, or there and not openable: the device list
+                            // tells those two apart, and it is asked once.
+                            if !reported_absent {
+                                reported_absent = true;
+                                if !quiet {
+                                    println!(
+                                        "The keyboard {:04x}:{:04x} is not openable yet; still listening to the DAW, and looking again every {KEYBOARD_RETRY_MILLIS} ms.",
+                                        ids.0, ids.1
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(message) = keyboard_gone {
+            if stop_requested() {
+                // An interrupted read from a keyboard that is going away is still
+                // how the run ends, not something to recover from.
+                break;
+            }
+            keyboard = None;
+            if !quiet {
+                let why = match Hid::enumerate_matching(ids.0, ids.1) {
+                    Ok((_, true)) => "it is still listed, so it is there and not answering".to_string(),
+                    Ok((_, false)) => "it is not listed any more, so it was unplugged".to_string(),
+                    Err(reason) => format!("asking the device list failed: {reason}"),
+                };
+                println!(
+                    "The keyboard is gone ({message}): {why}. Listening to the DAW goes on; the keyboard is looked for again every {KEYBOARD_RETRY_MILLIS} ms."
+                );
             }
         }
 
@@ -323,18 +413,28 @@ pub fn run(
         } else {
             pages::render(paging.page, decoder.studio(), paging.size)
         };
-        if let Some(reports) = screen.reports(&frame) {
-            // Both queues are empty at this point, so waiting a few milliseconds
-            // costs nothing but frames.
-            let rest = pace.rest(Instant::now());
-            if !rest.is_zero() {
-                std::thread::sleep(rest);
-            }
-            for report in reports {
-                let _ = hid.write_raw(&report);
+        if let Some(device) = keyboard.as_ref() {
+            if let Some(reports) = screen.reports(&frame) {
+                // Both queues are empty at this point, so waiting a few
+                // milliseconds costs nothing but frames.
+                let rest = pace.rest(Instant::now());
+                if !rest.is_zero() {
+                    std::thread::sleep(rest);
+                }
+                for report in reports {
+                    let _ = device.write_raw(&report);
+                }
             }
         }
     }
+
+    // The run is over, for whatever reason: give the display back to the
+    // keyboard's own logic first, on whichever handle is current - the one
+    // plugged in last, if the keyboard went away and came back.
+    if let Some(device) = keyboard.as_ref() {
+        let _ = device.write_raw(&[0xa0, 0x07, 0x00]);
+    }
+    outcome?;
 
     if !quiet {
         let studio = decoder.studio();
@@ -371,6 +471,23 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_panel_that_was_unplugged_is_written_to_in_full_again() {
+        let mut screen = Screen::new();
+        let frame = screen::on();
+        assert!(screen.reports(&frame).is_some());
+
+        // What a panel shows after being unplugged and plugged back in is not
+        // knowable, so the same picture has to go out again: a panel reached for
+        // the first time is exactly what forgetting describes.
+        screen.forget();
+        assert!(
+            screen.reports(&frame).is_some(),
+            "a panel that was away needs the frame again"
+        );
+        assert!(screen.reports(&frame).is_none(), "and only once");
+    }
 
     #[test]
     fn a_frame_is_sent_once_and_only_again_when_it_changes() {

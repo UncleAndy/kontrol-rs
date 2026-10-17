@@ -47,7 +47,7 @@ pub const DIAL_POSITION_BYTE: usize = 28;
 
 pub struct Engine {
     table: MappingTable,
-    button_state: [bool; MAX_BUTTONS],
+    held_layer: [Option<Layer>; MAX_BUTTONS],
     dial_position: Option<u8>,
     shift_was_pressed: bool,
 }
@@ -56,7 +56,7 @@ impl Engine {
     pub fn new(table: MappingTable) -> Self {
         Engine {
             table,
-            button_state: [false; MAX_BUTTONS],
+            held_layer: [None; MAX_BUTTONS],
             dial_position: None,
             shift_was_pressed: false,
         }
@@ -64,6 +64,25 @@ impl Engine {
 
     pub fn table(&self) -> &MappingTable {
         &self.table
+    }
+
+    /// Lets go of everything that is being held and forgets it, each button in
+    /// the layer it was pressed in.
+    ///
+    /// Two callers: SHIFT released before the other buttons - their release would
+    /// otherwise be looked up in the wrong layer - and a keyboard that goes away
+    /// mid-press, where a key left held down in another program outlives the
+    /// unplug. The layer is remembered rather than assumed for exactly that
+    /// second case: what is held when the keyboard is pulled out can have been
+    /// pressed under either of them.
+    pub fn release_all(&mut self, sink: &mut impl Sink) {
+        for index in 1..MAX_BUTTONS {
+            if let Some(layer) = self.held_layer[index] {
+                let mapping = self.table.get(index as i32, layer);
+                emit(&mapping, sink, false);
+            }
+        }
+        self.held_layer = [None; MAX_BUTTONS];
     }
 
     /// Lights the LEDs the way the C tool does after start-up: SHIFT and the
@@ -108,13 +127,7 @@ impl Engine {
             // would be looked up in the wrong layer, so everything that is held
             // is released here and forgotten.
             if !shift_is_pressed {
-                for index in 1..MAX_BUTTONS {
-                    if self.button_state[index] {
-                        let mapping = self.table.get(index as i32, Layer::Shifted);
-                        emit(&mapping, sink, false);
-                    }
-                }
-                self.button_state = [false; MAX_BUTTONS];
+                self.release_all(sink);
             }
         }
 
@@ -167,13 +180,13 @@ impl Engine {
         };
         for button_number in 1..MAX_BUTTONS {
             let pressed = key_value & (1u64 << button_number) != 0;
-            if pressed == self.button_state[button_number] {
+            if pressed == self.held_layer[button_number].is_some() {
                 continue;
             }
 
             let mapping = self.table.get(button_number as i32, layer);
             emit(&mapping, sink, pressed);
-            self.button_state[button_number] = pressed;
+            self.held_layer[button_number] = if pressed { Some(layer) } else { None };
         }
     }
 
@@ -287,6 +300,30 @@ mod tests {
             sink.calls,
             vec![Call::Key(57, true), Call::Key(57, false)]
         );
+    }
+
+    /// Everything held is let go of when the keyboard goes away: a key left
+    /// pressed in another program would outlive the unplug, so the release has to
+    /// come from the tool itself.
+    #[test]
+    fn everything_held_is_let_go_of_when_the_keyboard_goes_away() {
+        let table = table_with(&[(9, Layer::Normal, &[MappedKey::key(57)])]); // Play -> Space
+        let mut engine = Engine::new(table);
+        let mut sink = Recorder::default();
+
+        engine.process(&report(&[0x00, 0x02, 0x00, 0x00, 0x00]), &mut sink);
+        assert_eq!(sink.calls, vec![Call::Key(57, true)]);
+
+        // No further report ever arrives: the keyboard is unplugged with the
+        // button still down.
+        sink.calls.clear();
+        engine.release_all(&mut sink);
+        assert_eq!(sink.calls, vec![Call::Key(57, false)]);
+
+        // And it is forgotten: the next report must not release it twice.
+        sink.calls.clear();
+        engine.release_all(&mut sink);
+        assert!(sink.calls.is_empty(), "{:?}", sink.calls);
     }
 
     /// An unchanged report sends nothing; a repeated one does not repeat.

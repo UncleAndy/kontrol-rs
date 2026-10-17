@@ -399,8 +399,11 @@ fn main() {
                     }
                 };
                 let _ = hid.write_raw(&[0xa0, 0x03, 0x04]);
-                let outcome = kontrol_rs::live::run(&hid, input, page, size, quiet, time_layout);
-                let _ = hid.write_raw(&[0xa0, 0x07, 0x00]);
+                // The handle is handed over: the loop may have to open the
+                // keyboard again after it is unplugged, and it gives the display
+                // back to the keyboard itself on the way out, whichever handle
+                // that is by then.
+                let outcome = kontrol_rs::live::run(hid, input, page, size, quiet, time_layout);
                 if let Err(message) = outcome {
                     println!("{message}");
                     exit(1);
@@ -536,25 +539,30 @@ held by another process (a running komplement/konfigure) or by the kernel driver
     }
 
     let mut engine = Engine::new(table);
-    let mut outputs = Outputs {
-        hid: &hid,
-        leds: &mut leds,
-        keyboard: None,
-        mmc: None,
-        failed: None,
-    };
 
-    // Lights the LEDs and, in doing so, checks that the device answers.
-    engine.light_up_initial(&mut outputs, animate);
-    if let Some(reason) = outputs.failed.clone() {
-        println!(
-            "The HID device {vid:04x}:{pid:04x} was opened, but writing the LED state to it failed: {reason}"
-        );
-        println!(
-            "Reading works while writing does not; check whether something else holds the device\n\
+    // Lights the LEDs and, in doing so, checks that the device answers. The
+    // keystroke sink is built per turn below, because it borrows the handle the
+    // loop reads from and that handle is replaced when the keyboard comes back
+    // after an unplug.
+    {
+        let mut outputs = Outputs {
+            hid: &hid,
+            leds: &mut leds,
+            keyboard: None,
+            mmc: None,
+            failed: None,
+        };
+        engine.light_up_initial(&mut outputs, animate);
+        if let Some(reason) = outputs.failed.clone() {
+            println!(
+                "The HID device {vid:04x}:{pid:04x} was opened, but writing the LED state to it failed: {reason}"
+            );
+            println!(
+                "Reading works while writing does not; check whether something else holds the device\n\
 (another komplement/konfigure instance, or the kernel driver)."
-        );
-        exit(return_code);
+            );
+            exit(return_code);
+        }
     }
 
     // ALSA output port for MMC messages.
@@ -576,7 +584,6 @@ held by another process (a running komplement/konfigure) or by the kernel driver
     } else {
         None
     };
-    outputs.mmc = mmc.as_ref();
 
     // The virtual keyboard.
     if uinput_path != DEFAULT_UINPUT_PATH {
@@ -607,17 +614,98 @@ write but not read and makes the read-write open fail. Remove the ACLs with\n\
             exit(-2);
         }
     };
-    outputs.keyboard = Some(&mut keyboard);
-
     let mut dump = Dump::new();
     let started = Instant::now();
     let mut buffer = [0u8; READ_BUFFER_SZ];
     let mut read_errors = 0;
+    // The keyboard can be unplugged while this runs, and that is a state to wait
+    // out rather than the end: the handle dies with the device, the USB ids do
+    // not, so the ids are kept and the device is opened again when it is back.
+    // A key left held down in another program would outlive the unplug, so
+    // everything held is let go of first - that is what `release_all` is for.
+    let mut device = Some(hid);
+    let mut last_search = Instant::now();
+    let mut reported_absent = false;
 
     while !ABORTED.load(Ordering::SeqCst) {
-        let read = match hid.read_timeout(&mut buffer, 2000) {
+        let Some(current) = device.as_ref() else {
+            std::thread::sleep(std::time::Duration::from_millis(
+                kontrol_rs::live::KEYBOARD_RETRY_MILLIS,
+            ));
+            if last_search.elapsed()
+                >= std::time::Duration::from_millis(kontrol_rs::live::KEYBOARD_RETRY_MILLIS)
+            {
+                last_search = Instant::now();
+                match Hid::open(vid as u16, pid as u16) {
+                    Ok(opened) => {
+                        // Its LEDs went with it, so they are lit the way start-up
+                        // does, and the display is taken over again.
+                        {
+                            let mut fresh = Outputs {
+                                hid: &opened,
+                                leds: &mut leds,
+                                keyboard: Some(&mut keyboard),
+                                mmc: mmc.as_ref(),
+                                failed: None,
+                            };
+                            engine.light_up_initial(&mut fresh, false);
+                        }
+                        let _ = opened.write_raw(&[0xa0, 0x03, 0x04]);
+                        if !quiet {
+                            println!(
+                                "The keyboard is back ({vid:04x}:{pid:04x}); reading it again."
+                            );
+                        }
+                        device = Some(opened);
+                        reported_absent = false;
+                    }
+                    Err(reason) => {
+                        if !reported_absent {
+                            reported_absent = true;
+                            if !quiet {
+                                println!(
+                                    "Waiting for the keyboard ({reason}); the virtual keyboard stays as it is."
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            continue;
+        };
+
+        // Built per turn: it borrows the current handle, and that handle is a
+        // different one after the keyboard was unplugged and came back.
+        let mut outputs = Outputs {
+            hid: current,
+            leds: &mut leds,
+            keyboard: Some(&mut keyboard),
+            mmc: mmc.as_ref(),
+            failed: None,
+        };
+
+        let read = match current.read_timeout(&mut buffer, 2000) {
             Ok(read) => read,
             Err(reason) => {
+                // Whether it is gone is asked of the device list, not of hidapi:
+                // its own text for this ("hid_error is not implemented yet") says
+                // nothing, while the list needs no permission and answers.
+                let gone = matches!(
+                    Hid::enumerate_matching(vid as u16, pid as u16),
+                    Ok((_, false))
+                );
+                if gone {
+                    engine.release_all(&mut outputs);
+                    device = None;
+                    reported_absent = false;
+                    if !quiet {
+                        println!(
+                            "The keyboard {vid:04x}:{pid:04x} went away: everything held was released, and it is looked for again every {} ms.",
+                            kontrol_rs::live::KEYBOARD_RETRY_MILLIS
+                        );
+                    }
+                    continue;
+                }
                 println!("Error reading HID device: {reason}");
                 read_errors += 1;
                 if read_errors > 10 {
@@ -643,16 +731,20 @@ write but not read and makes the read-write open fail. Remove the ACLs with\n\
         engine.process(packet, &mut outputs);
     }
 
-    // Clean up.
-    if animate {
-        leds.animate_off(&hid);
-    } else {
-        leds.off(&hid);
-    }
+    // Clean up, on whichever handle is current: the keyboard may have been
+    // unplugged and come back while this ran, and the handle it was opened with
+    // is dead by then.
+    if let Some(current) = device.as_ref() {
+        if animate {
+            leds.animate_off(current);
+        } else {
+            leds.off(current);
+        }
 
-    // Give the display back to the keyboard's own logic.
-    if screen_takeover {
-        let _ = hid.write_raw(&[0xa0, 0x07, 0x00]);
+        // Give the display back to the keyboard's own logic.
+        if screen_takeover {
+            let _ = current.write_raw(&[0xa0, 0x07, 0x00]);
+        }
     }
 
     exit(return_code);

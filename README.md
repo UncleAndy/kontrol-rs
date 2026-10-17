@@ -246,6 +246,19 @@ The keyboard and the DAW's port are both *found*, not passed in:
   (`(readable, subscribable, hardware)`), together with the line that pins the answer. On a machine
   where a USB interface also offers MIDI inputs this last case is the normal one: pin it once.
 
+**A keyboard that is unplugged while the tool runs is waited for, not died of.** When a read fails,
+the device list is asked rather than hidapi - its own text for this case, `hid_error is not
+implemented yet`, says nothing - and that needs no permission, so it separates a keyboard that is
+gone from one that is there and not answering. From then on the keyboard is looked for twice a
+second. The display mode keeps the HID handle itself (finding it again means opening it again): the
+panel *is* that same device, so while it is away there is nothing to draw, and when it is back the
+panel is claimed again and the frame is written in full, because what a panel shows after a replug is
+not knowable - the cached frame would otherwise be "unchanged" and never sent again. The keystroke
+mode keeps its virtual keyboard alive throughout and *lets go of everything held* before waiting:
+with the real keyboard gone no release will ever arrive, and a key left down in another program
+outlives the unplug. Ctrl+C ends either mode as before, giving the display back to the keyboard's own
+logic on whichever handle is current by then.
+
 This is the *finding* half of the service that is planned; the service itself - one program with
 keystrokes and panel, the panel in a task of its own that is restarted when it fails - is the
 next step, and `doc/display-interface.md` keeps that plan.

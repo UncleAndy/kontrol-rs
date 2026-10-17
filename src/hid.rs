@@ -108,6 +108,10 @@ pub struct Hid {
     /// Kept alive: `HidDevice` borrows from the context internally.
     _api: HidApi,
     device: HidDevice,
+    /// Remembered, because a handle to a keyboard that was unplugged is dead
+    /// while the ids are not: this is what finds it again after it is back.
+    vendor: u16,
+    product: u16,
 }
 
 impl Hid {
@@ -121,7 +125,15 @@ impl Hid {
         Ok(Hid {
             _api: api,
             device,
+            vendor: vid,
+            product: pid,
         })
+    }
+
+    /// The USB ids this handle was opened with, so the same keyboard can be
+    /// found again once it comes back.
+    pub fn ids(&self) -> (u16, u16) {
+        (self.vendor, self.product)
     }
 
     /// Returns the number of bytes written, or the error hidapi reported.
