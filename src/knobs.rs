@@ -123,24 +123,81 @@ pub fn fader_message(channel: u8, fraction: f32) -> [u8; 3] {
     ]
 }
 
-/// Says which knobs moved, and how far. One line per report that moved
-/// something, and nothing at all otherwise - a quiet keyboard stays quiet.
-pub fn announce(moved: &[i32; KNOBS]) {
-    let lines: Vec<String> = moved
-        .iter()
-        .enumerate()
-        .filter(|(_, detents)| **detents != 0)
-        .map(|(knob, detents)| {
-            format!(
-                "Knob {}: {}{detents}",
-                knob + 1,
-                if *detents > 0 { "+" } else { "" }
-            )
-        })
-        .collect();
-    if !lines.is_empty() {
-        println!("[knobs] {}", lines.join(", "));
-    }
+/// The pitch bend channel of the master fader: the ninth one. Our strips are the
+/// eight channels the decoder reads, so the master is what is left - and moving
+/// it is the same message a strip's fader sends, on that channel.
+pub const MASTER_CHANNEL: u8 = 8;
+
+/// The first of the eight CC numbers the V-Pots use, one per strip, in the same
+/// order as the faders.
+pub const PAN_CC_FIRST: u8 = 16;
+
+/// How much of the whole pan travel one detent is worth by default. A tenth of
+/// the travel, and *not* finer: the V-Pot's own scale is 128 steps wide, so a
+/// step below 1/127 does not reach the next controller value and half the
+/// detents would be swallowed by the rounding - measured on Reaper, which is
+/// where 0.005 turned out to feel dead.
+pub const DEFAULT_PAN_STEP: f32 = 0.01;
+
+/// A DAW does not answer a V-Pot with the pan itself: it answers with the ring
+/// around it, twelve dots wide, and the middle dot is the centre. Measured on
+/// Reaper - every centred track sat on dot 6, and the one the tool moved walked
+/// towards it.
+pub const PAN_RING_CC_FIRST: u8 = 0x30;
+/// The ring's centre dot: the one a centred pan shows.
+pub const PAN_RING_CENTRE: u8 = 6;
+/// The ring's widest dot: hard right, with dot zero hard left.
+pub const PAN_RING_MAX: u8 = 11;
+
+/// Where a strip's pan is, read off the ring. Twelve dots cannot say more than
+/// a twelfth of the travel, which is why this is only ever a starting point: it
+/// is the DAW's own word for it, and better than a guess, but the controller
+/// value that follows corrects it exactly.
+pub fn pan_from_dot(dot: u8) -> f32 {
+    let dot = dot.min(PAN_RING_MAX);
+    let steps = if dot >= PAN_RING_CENTRE {
+        f32::from(dot - PAN_RING_CENTRE) / f32::from(PAN_RING_MAX - PAN_RING_CENTRE)
+    } else {
+        -f32::from(PAN_RING_CENTRE - dot) / f32::from(PAN_RING_CENTRE)
+    };
+    (0.5 + steps / 2.0).clamp(0.0, 1.0)
+}
+
+/// Pan the way a surface moves it: a controller on the strip's own CC number,
+/// 0 hard left, 64 the middle, 127 hard right.
+pub fn pan_message(strip: u8, fraction: f32) -> [u8; 3] {
+    let value = (fraction.clamp(0.0, 1.0) * 127.0).round() as u8;
+    [0xB0, PAN_CC_FIRST + (strip & 0x07), value]
+}
+
+/// Pan moved by a turn of the knob - the one control that counts the other way
+/// round. The DAW's V-Pot scale runs opposite to our detents (felt on the
+/// keyboard, not inferred from the protocol), so a turn to the right asks for a
+/// smaller controller value. Levels are *not* inverted: the fader and the V-Pot
+/// are different messages, and the fader's direction was right as it was.
+pub fn pan(current: f32, detents: i32, step: f32) -> f32 {
+    volume(current, -detents, step)
+}
+
+/// What a knob does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KnobAction {
+    /// Nothing: the knob is read, and that is all.
+    None,
+    /// The current track's level, sent as its fader moves it.
+    Volume,
+    /// The current track's pan, sent as its V-Pot moves it.
+    Pan,
+    /// The master level.
+    Master,
+}
+
+/// One knob: what it does, and how big a detent is with and without SHIFT.
+#[derive(Clone, Copy, Debug)]
+pub struct KnobBinding {
+    pub action: KnobAction,
+    pub step: f32,
+    pub step_shift: f32,
 }
 
 #[cfg(test)]
@@ -294,6 +351,47 @@ mod tests {
         assert_eq!(fader_message(0, -1.0), fader_message(0, 0.0));
         // The strip, not the message, says which channel.
         assert_eq!(fader_message(5, 0.0)[0], 0xE5);
+    }
+
+    #[test]
+    fn a_ring_dot_says_a_twelfth_of_where_the_pan_is() {
+        assert!((pan_from_dot(PAN_RING_CENTRE) - 0.5).abs() < 1e-6, "the middle dot");
+        assert!((pan_from_dot(PAN_RING_MAX) - 1.0).abs() < 1e-6, "the widest is hard right");
+        assert!((pan_from_dot(0) - 0.0).abs() < 1e-6, "and dot zero is hard left");
+        // A dot the ring cannot show is clamped, not wrapped.
+        assert_eq!(pan_from_dot(200), pan_from_dot(PAN_RING_MAX));
+        // The left half has one fewer dot, and it is still a twelfth of travel.
+        assert!(pan_from_dot(5) < 0.5 && pan_from_dot(5) > 0.4);
+    }
+
+    #[test]
+    fn pan_and_the_master_are_the_messages_the_surface_itself_sends() {
+        // A V-Pot: the strip's own controller number, the pan on its own scale,
+        // 64 in the middle.
+        assert_eq!(pan_message(0, 0.5), [0xB0, PAN_CC_FIRST, 64]);
+        assert_eq!(pan_message(3, 0.0), [0xB0, PAN_CC_FIRST + 3, 0]);
+        assert_eq!(pan_message(3, 1.0), [0xB0, PAN_CC_FIRST + 3, 127]);
+        // Out of range is clamped rather than wrapped, as with the faders.
+        assert_eq!(pan_message(0, 2.0), pan_message(0, 1.0));
+        assert_eq!(pan_message(0, -1.0), pan_message(0, 0.0));
+        // The master is the ninth fader: the same message as a strip's, on a
+        // channel the strips do not use.
+        assert_eq!(fader_message(MASTER_CHANNEL, 0.5)[0], 0xE8);
+        assert!(
+            MASTER_CHANNEL as usize >= KNOBS,
+            "the eight strips are the channels below it"
+        );
+        // A knob bound to pan gets the V-Pot's scale, not the fader's.
+        assert!(DEFAULT_PAN_STEP > 0.0 && DEFAULT_PAN_STEP <= 1.0);
+        // A pan is the one control that counts the other way round: a turn up
+        // moves it down, and the levels are left alone.
+        assert!(pan(0.5, 1, DEFAULT_PAN_STEP) < 0.5, "a turn up moves the pan down");
+        assert!(pan(0.5, -1, DEFAULT_PAN_STEP) > 0.5, "and a turn down moves it up");
+        // And it is the finer of the two by default: a pan is set by ear.
+        assert!(
+            DEFAULT_PAN_STEP < DEFAULT_VOLUME_STEP,
+            "pan {DEFAULT_PAN_STEP} should move by less per detent than a level {DEFAULT_VOLUME_STEP}"
+        );
     }
 
     #[test]

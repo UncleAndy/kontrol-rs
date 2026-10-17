@@ -253,6 +253,10 @@ pub fn ports_with(seq: &Seq) -> Result<Vec<Port>, String> {
     Ok(found)
 }
 
+/// The environment variable that turns the port's traffic log on: an instrument
+/// for a control that misbehaves, not something a normal run wants.
+pub const LOG_ENV: &str = "KOMPLEMENT_MCU_LOG";
+
 /// Our own input port, subscribed to the DAW's.
 pub struct McuInput {
     seq: Seq,
@@ -261,6 +265,10 @@ pub struct McuInput {
     /// Why port announcements are unavailable, when they are: the listener still
     /// works, but a DAW restart would only be noticed at the end of the run.
     announce_error: Option<String>,
+    /// Whether the Mackie Control traffic is printed as it passes: what the DAW
+    /// sends us and what we send it. The instrument for a control that does not
+    /// behave the way its protocol says - measured, not reasoned about.
+    log: bool,
 }
 
 impl McuInput {
@@ -367,6 +375,7 @@ impl McuInput {
         });
 
         let mut input = McuInput {
+            log: std::env::var_os(LOG_ENV).is_some(),
             seq,
             port,
             source: ours.ok_or_else(|| format!("our own port {port} is not in ALSA's list"))?,
@@ -433,6 +442,9 @@ impl McuInput {
     /// has to answer as well as listen, which is why the port is created with
     /// `WRITE`, and this is the same mechanism the MMC messages already use.
     pub fn send(&self, message: &[u8]) -> Result<(), String> {
+        if self.log {
+            println!("[mcu] out {:02x?}", message);
+        }
         let mut encoder =
             MidiEvent::new(MIDI_MESSAGE_MAX).map_err(|err| format!("no MIDI encoder: {err}"))?;
         let (used, event) = encoder
@@ -545,6 +557,9 @@ impl McuInput {
                         // a client id fed to the decoder would be a note number.
                         read.announcements += 1;
                     } else if let Some(bytes) = message_bytes(&event) {
+                        if self.log {
+                            println!("[mcu] in  {:02x?}", bytes);
+                        }
                         for byte in bytes {
                             decoder.push(byte);
                         }

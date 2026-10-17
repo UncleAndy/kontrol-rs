@@ -467,9 +467,7 @@ fn main() {
                         quiet,
                         time_layout,
                         keys,
-                        settings.knob1_volume(),
-                        settings.knob1_step(),
-                        settings.knob1_step_shift(),
+                        settings.knob_bindings(),
                     );
                 if let Err(message) = outcome {
                     println!("{message}");
@@ -686,13 +684,6 @@ write but not read and makes the read-write open fail. Remove the ACLs with\n\
         }
     };
     let mut dump = Dump::new();
-    // The knobs say nothing on the MIDI port while the display is taken over;
-    // their movement is in the report instead, read by the same bytes whatever
-    // mode this run is in.
-    let mut knobs = kontrol_rs::knobs::Knobs::new(
-        kontrol_rs::knobs::DEFAULT_STEP,
-        kontrol_rs::knobs::DEFAULT_MODULUS,
-    );
     let started = Instant::now();
     let mut buffer = [0u8; READ_BUFFER_SZ];
     let mut read_errors = 0;
@@ -800,7 +791,6 @@ write but not read and makes the read-write open fail. Remove the ACLs with\n\
         if dump_packets {
             let stamp_ms = started.elapsed().as_millis() as i64;
             dump.packet(packet, stamp_ms);
-            kontrol_rs::knobs::announce(&knobs.read(packet));
         }
 
         engine.process(packet, &mut outputs);

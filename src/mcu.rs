@@ -7,6 +7,7 @@
 //! byte back, so listening cannot disturb the DAW.
 
 use crate::studio::{Digits, ASSIGNMENT_DIGITS, BANK_CHANNELS, DISPLAY_DIGITS, Studio, Transport};
+use crate::knobs::{pan_from_dot, MASTER_CHANNEL, PAN_CC_FIRST, PAN_RING_CC_FIRST};
 use crate::timecode::TimeLayout;
 
 /// The channel strip LEDs, one block of eight notes per row. Measured:
@@ -51,6 +52,13 @@ pub enum Message {
     Fader { channel: u8, value: i16 },
     /// A meter level, one per channel, and by far the most traffic.
     Level { channel: u8, value: u8 },
+    /// The V-Pot's ring: where a strip's pan is, as the DAW sees it. The only
+    /// pan feedback there is - see `knobs::pan_from_dot`.
+    Ring { strip: u8, dot: u8 },
+    /// A V-Pot being moved: the strip's pan, on the strip's own controller
+    /// number. Unlike the fader this is not a channel of its own - the strips
+    /// are told apart by the CC number, and they all arrive on channel one.
+    Pan { strip: u8, value: u8 },
     /// Seven characters of a track name at `offset`.
     Name { offset: u8, text: String },
     /// An LCD write that is not a name field: Reaper writes its own status
@@ -167,6 +175,18 @@ fn decode(status: u8, data: [u8; 2]) -> Message {
         // The twelve-digit display comes over the controllers numbered from 64,
         // which is the rightmost digit. Nothing else lives in the controllers
         // this decoder reads, so the rest is still unread.
+        0xb0 if (PAN_RING_CC_FIRST..PAN_RING_CC_FIRST + BANK_CHANNELS as u8).contains(&data[0]) => {
+            Message::Ring {
+                strip: data[0] - PAN_RING_CC_FIRST,
+                dot: data[1],
+            }
+        },
+        0xb0 if (PAN_CC_FIRST..PAN_CC_FIRST + BANK_CHANNELS as u8).contains(&data[0]) => {
+            Message::Pan {
+                strip: data[0] - PAN_CC_FIRST,
+                value: data[1],
+            }
+        }
         0xb0 if (64..64 + DISPLAY_DIGITS as u8).contains(&data[0]) => Message::Display {
             digit: data[0] - 64,
             value: data[1],
@@ -280,6 +300,29 @@ impl Decoder {
                 let index = *channel as usize;
                 if index < BANK_CHANNELS {
                     self.studio.bank[index].fader = fader_fraction(*value);
+                    self.mirror();
+                } else if index == MASTER_CHANNEL as usize {
+                    // The ninth fader: the master, which the strips leave over.
+                    self.studio.master_fader = fader_fraction(*value);
+                }
+            }
+            Message::Ring { strip, dot } => {
+                let index = *strip as usize;
+                // Only until the DAW says something exact: the ring is a twelfth
+                // of the travel wide, so it seeds where the pan is and the
+                // controller value corrects it. A ring that arrives again must
+                // not pull a pan the tool has since set back to the coarse dot.
+                if index < BANK_CHANNELS && !self.studio.bank[index].pan_known {
+                    self.studio.bank[index].pan = pan_from_dot(*dot);
+                    self.studio.bank[index].pan_known = true;
+                    self.mirror();
+                }
+            }
+            Message::Pan { strip, value } => {
+                let index = *strip as usize;
+                if index < BANK_CHANNELS {
+                    self.studio.bank[index].pan = f32::from(*value) / 127.0;
+                    self.studio.bank[index].pan_known = true;
                     self.mirror();
                 }
             }
@@ -422,6 +465,53 @@ mod tests {
         sysex.extend_from_slice(text);
         sysex.push(0xf7);
         sysex
+    }
+
+    #[test]
+    fn the_ring_says_where_a_pan_stands_until_the_pan_itself_arrives() {
+        let mut decoder = Decoder::new();
+        // A centred track: dot six of twelve, and that is the DAW's own word.
+        feed(&mut decoder, &[0xb0, 0x30, 6]);
+        assert!((decoder.studio().bank[0].pan - 0.5).abs() < 0.01, "the middle dot");
+        assert!(decoder.studio().bank[0].pan_known);
+        // Each strip has a controller number of its own.
+        feed(&mut decoder, &[0xb0, 0x31, 11]);
+        assert!(decoder.studio().bank[1].pan > 0.99, "the widest dot is hard right");
+        feed(&mut decoder, &[0xb0, 0x32, 0]);
+        assert!(decoder.studio().bank[2].pan < 0.01, "and dot zero is hard left");
+        // The exact value wins, and a ring arriving afterwards must not pull the
+        // pan back to what the coarse dot can say.
+        feed(&mut decoder, &[0xb0, 16, 100]);
+        let exact = decoder.studio().bank[0].pan;
+        assert!(exact > 0.7, "the controller value is the truth");
+        feed(&mut decoder, &[0xb0, 0x30, 6]);
+        assert_eq!(decoder.studio().bank[0].pan, exact, "the coarse dot keeps quiet");
+    }
+
+    #[test]
+    fn the_v_pots_and_the_master_fader_are_read_back() {
+        let mut decoder = Decoder::new();
+        // A V-Pot of the first strip, in the middle and then hard left.
+        feed(&mut decoder, &[0xb0, 16, 64]);
+        assert!(
+            (decoder.studio().bank[0].pan - 0.5).abs() < 0.01,
+            "the V-Pot's middle is 64, and reads back as the middle"
+        );
+        feed(&mut decoder, &[0xb0, 16, 0]);
+        assert!(decoder.studio().bank[0].pan < 0.01, "hard left");
+        // The second strip has a controller number of its own, and the first
+        // one must not move with it.
+        feed(&mut decoder, &[0xb0, 17, 127]);
+        assert!(decoder.studio().bank[1].pan > 0.99, "hard right");
+        assert!(decoder.studio().bank[0].pan < 0.01, "and the first one stays");
+        // The master: the ninth fader, which the eight strips leave over.
+        let before = decoder.studio().master_fader;
+        feed(&mut decoder, &[0xe8, 0x00, 0x40]);
+        assert!(
+            (decoder.studio().master_fader - 0.5).abs() < 0.01,
+            "half-way up the master"
+        );
+        assert_ne!(before, decoder.studio().master_fader);
     }
 
     #[test]
@@ -580,10 +670,11 @@ mod tests {
     fn anything_the_screen_does_not_read_changes_nothing() {
         let mut decoder = Decoder::new();
         let before = decoder.studio().clone();
-        // A blinking LED and a V-Pot ring mode: neither is read yet, and both
-        // must leave the state alone.
+        // A blinking LED and a controller nothing reads. (The ring is read now:
+        // the capture showed its values running five to eleven, which a mode of
+        // four values cannot be - it is the dot the pan stands on.)
         feed(&mut decoder, &[0x90, 76, 127]);
-        feed(&mut decoder, &[0xb0, 48, 3]);
+        feed(&mut decoder, &[0xb0, 80, 3]);
         assert_eq!(decoder.studio(), &before);
     }
 

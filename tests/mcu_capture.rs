@@ -78,6 +78,10 @@ fn the_decoder_reads_reapers_own_stream() {
                 Message::Led { .. } => leds += 1,
                 Message::Fader { .. } => faders += 1,
                 Message::Level { .. } => levels += 1,
+                // V-Pots and their rings: controller messages, and they count
+                // with the rest of them.
+                Message::Pan { .. } => others += 1,
+                Message::Ring { .. } => others += 1,
                 Message::Name { .. } => name_writes += 1,
                 Message::Status { ref text } => {
                     // The status line is Reaper's own, and must never be read

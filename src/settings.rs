@@ -37,15 +37,21 @@ pub struct Settings {
     /// piece of its name (`Midi Through`). What discovery falls back to when it
     /// cannot decide, and what `-X` uses when its own argument finds nothing.
     pub mcu: Option<String>,
-    /// Which knob does what: `knob1 = volume` moves the current track's level
-    /// over MCU, `knob1 = none` leaves the knobs read but silent.
-    pub knob1: Option<String>,
-    /// How much of the full travel one detent of the first knob is worth, as a
-    /// fraction: `knob1_step = 0.05` is twenty detents across the whole travel.
-    pub knob1_step: Option<f32>,
-    /// The same with SHIFT held: `knob1_step_shift = 0.005` is two hundred
-    /// detents across the whole travel, for setting a level to the decibel.
-    pub knob1_step_shift: Option<f32>,
+    /// What each knob does and how big its detent is: `knob1 = volume` moves the
+    /// current track's level over MCU, `knob2 = pan` moves its pan, `knob8 =
+    /// master` moves the master, and `knobN = none` leaves that knob read but
+    /// silent. `knobN_step` and `knobN_step_shift` say how much of the travel one
+    /// detent is worth, with and without SHIFT.
+    pub knobs: [KnobSetting; crate::knobs::KNOBS],
+}
+
+/// One knob's settings, as a file spells them out.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct KnobSetting {
+    /// The word from the file: `volume`, `pan`, `master` or `none`.
+    pub action: Option<String>,
+    pub step: Option<f32>,
+    pub step_shift: Option<f32>,
 }
 
 impl Settings {
@@ -59,42 +65,41 @@ impl Settings {
         Some(base.join(DIRECTORY).join(FILE_NAME))
     }
 
-    /// Whether the first knob drives the current track's level.
-    ///
-    /// On unless the settings say otherwise: a knob that does nothing is the
-    /// surprise, not one that moves a fader - and `knob1 = none` is how a user
-    /// says "read them, but say nothing".
-    pub fn knob1_volume(&self) -> bool {
-        match self.knob1.as_deref() {
-            Some(value) => !matches!(
-                value.trim().to_lowercase().as_str(),
-                "none" | "off" | "false" | "no"
-            ),
-            None => true,
+    /// The first knob is the current track's level, the second its pan and the
+    /// eighth the master level, unless the file says otherwise about any of
+    /// them: the defaults are the uses this tool knows, and a knob that does
+    /// nothing is the surprise, not one that moves a level. The other five stay
+    /// silent until they are asked for.
+    pub fn knob_bindings(&self) -> [crate::knobs::KnobBinding; crate::knobs::KNOBS] {
+        let mut bindings = [crate::knobs::KnobBinding {
+            action: crate::knobs::KnobAction::None,
+            step: crate::knobs::DEFAULT_VOLUME_STEP,
+            step_shift: crate::knobs::DEFAULT_SHIFT_STEP,
+        }; crate::knobs::KNOBS];
+        for (index, setting) in self.knobs.iter().enumerate() {
+            let action = match setting.action.as_deref().map(str::trim) {
+                Some(word) if word.eq_ignore_ascii_case("volume") => crate::knobs::KnobAction::Volume,
+                Some(word) if word.eq_ignore_ascii_case("pan") => crate::knobs::KnobAction::Pan,
+                Some(word) if word.eq_ignore_ascii_case("master") => crate::knobs::KnobAction::Master,
+                Some(_) => crate::knobs::KnobAction::None,
+                None if index == 0 => crate::knobs::KnobAction::Volume,
+                None if index == 1 => crate::knobs::KnobAction::Pan,
+                None if index == crate::knobs::KNOBS - 1 => crate::knobs::KnobAction::Master,
+                None => crate::knobs::KnobAction::None,
+            };
+            // Pan is the V-Pot's own 128-step scale, the faders are fourteen
+            // bits wide; both are "a fraction of the travel per detent".
+            let fallback = match action {
+                crate::knobs::KnobAction::Pan => crate::knobs::DEFAULT_PAN_STEP,
+                _ => crate::knobs::DEFAULT_VOLUME_STEP,
+            };
+            bindings[index] = crate::knobs::KnobBinding {
+                action,
+                step: usable_step(setting.step, fallback),
+                step_shift: usable_step(setting.step_shift, crate::knobs::DEFAULT_SHIFT_STEP),
+            };
         }
-    }
-
-    /// How much of the full travel one detent of the first knob is worth.
-    ///
-    /// Anything a hand-written file can say is checked here rather than trusted:
-    /// a fraction of nothing, a negative number, a fraction above the whole
-    /// travel, or a number that is not a number at all falls back to the
-    /// measured default instead of moving a fader by an infinity.
-    pub fn knob1_step(&self) -> f32 {
-        match self.knob1_step {
-            Some(step) if step.is_finite() && step > 0.0 && step <= 1.0 => step,
-            _ => crate::knobs::DEFAULT_VOLUME_STEP,
-        }
-    }
-
-    /// The same with SHIFT held on the keyboard. Checked the same way, and the
-    /// default is finer than the plain step: with SHIFT the knob becomes a fine
-    /// adjustment rather than doing nothing.
-    pub fn knob1_step_shift(&self) -> f32 {
-        match self.knob1_step_shift {
-            Some(step) if step.is_finite() && step > 0.0 && step <= 1.0 => step,
-            _ => crate::knobs::DEFAULT_SHIFT_STEP,
-        }
+        bindings
     }
 
     /// Reads the settings, if the file is there.
@@ -157,15 +162,9 @@ impl Settings {
                 "uinput" => settings.uinput = Some(value.to_string()),
                 "mapping" => settings.mapping = Some(value.to_string()),
                 "mcu" => settings.mcu = Some(value.to_string()),
-                "knob1" => settings.knob1 = Some(value.to_string()),
-                "knob1_step" => match value.trim().parse::<f32>() {
-                    Ok(step) => settings.knob1_step = Some(step),
-                    Err(_) => notes.push(not_a_number(&key, value)),
-                },
-                "knob1_step_shift" => match value.trim().parse::<f32>() {
-                    Ok(step) => settings.knob1_step_shift = Some(step),
-                    Err(_) => notes.push(not_a_number(&key, value)),
-                },
+                other if other.starts_with("knob") => {
+                    apply_knob_setting(&mut settings, &key, value, &mut notes)
+                }
                 other => notes.push(format!("{other:?} is not a setting this tool knows; ignored")),
             }
         }
@@ -216,39 +215,135 @@ fn not_a_number(key: &str, value: &str) -> String {
     format!("{key:?}: {value:?} is not a hex number; using the default")
 }
 
+/// Reads one `knobN…` line: which knob, and which of the three things about it.
+///
+/// A name that is not a knob number is not obeyed and not hidden either: the
+/// note says what was ignored, so a typo in a file does not become silence.
+fn apply_knob_setting(settings: &mut Settings, key: &str, value: &str, notes: &mut Vec<String>) {
+    let rest = key[4..].to_lowercase();
+    let (digits, suffix) = match rest.find(|c: char| !c.is_ascii_digit()) {
+        Some(at) => (&rest[..at], &rest[at..]),
+        None => (rest.as_str(), ""),
+    };
+    let number = match digits.parse::<usize>() {
+        Ok(number) if (1..=crate::knobs::KNOBS).contains(&number) => number,
+        _ => {
+            notes.push(format!(
+                "{key:?} does not name a knob 1-{}; ignored",
+                crate::knobs::KNOBS
+            ));
+            return;
+        }
+    };
+    let knob = &mut settings.knobs[number - 1];
+    match suffix {
+        "" => {
+            let word = value.trim().to_lowercase();
+            if !matches!(
+                word.as_str(),
+                "volume" | "pan" | "master" | "none" | "off" | "false" | "no"
+            ) {
+                notes.push(format!(
+                    "{key:?}: {value:?} is not one of volume, pan, master, none; ignored"
+                ));
+                return;
+            }
+            knob.action = Some(word);
+        }
+        "_step" => match value.trim().parse::<f32>() {
+            Ok(step) => knob.step = Some(step),
+            Err(_) => notes.push(not_a_number(key, value)),
+        },
+        "_step_shift" => match value.trim().parse::<f32>() {
+            Ok(step) => knob.step_shift = Some(step),
+            Err(_) => notes.push(not_a_number(key, value)),
+        },
+        _ => notes.push(format!("{key:?} is not a setting this tool knows; ignored")),
+    }
+}
+
+/// A step a hand-written file can offer, or the default when it cannot: a
+/// fraction of nothing, a negative number, a fraction above the whole travel, or
+/// a number that is not a number at all must not become a level moved by an
+/// infinity.
+fn usable_step(step: Option<f32>, fallback: f32) -> f32 {
+    match step {
+        Some(step) if step.is_finite() && step > 0.0 && step <= 1.0 => step,
+        _ => fallback,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn the_first_knob_moves_the_level_unless_the_settings_say_no() {
-        // On by default: a knob that does nothing is the surprise, not one that
-        // moves a fader.
-        assert!(Settings::default().knob1_volume());
-        assert!(Settings::parse("knob1 = volume\n").0.knob1_volume());
-        assert!(!Settings::parse("knob1 = none\n").0.knob1_volume());
-        assert!(!Settings::parse("knob1 = OFF\n").0.knob1_volume());
-        // The step is a setting too, and anything unusable falls back rather
-        // than being obeyed: no zero, no negatives, nothing above the travel.
-        assert!((Settings::parse("knob1_step = 0.05\n").0.knob1_step() - 0.05).abs() < 1e-6);
-        assert_eq!(Settings::default().knob1_step(), crate::knobs::DEFAULT_VOLUME_STEP);
+        // The first knob is the level by default: a knob that does nothing is
+        // the surprise, not one that moves a fader. The others wait to be asked.
+        let bindings = Settings::default().knob_bindings();
+        assert_eq!(bindings[0].action, crate::knobs::KnobAction::Volume);
+        assert_eq!(bindings[1].action, crate::knobs::KnobAction::Pan);
+        assert_eq!(bindings[7].action, crate::knobs::KnobAction::Master);
+        // And the ones with no use of their own stay silent.
+        assert_eq!(bindings[3].action, crate::knobs::KnobAction::None);
+        // A file says what each knob does, and `none` silences one.
+        let bindings = Settings::parse("knob1 = none\nknob2 = pan\nknob8 = master\n")
+            .0
+            .knob_bindings();
+        assert_eq!(bindings[0].action, crate::knobs::KnobAction::None);
+        assert_eq!(bindings[1].action, crate::knobs::KnobAction::Pan);
+        assert_eq!(bindings[7].action, crate::knobs::KnobAction::Master);
         assert_eq!(
-            Settings::parse("knob1_step = 0\n").0.knob1_step(),
+            Settings::parse("knob3 = OFF\n").0.knob_bindings()[2].action,
+            crate::knobs::KnobAction::None
+        );
+        // A knob number that is not one, and a word that is not an action, are
+        // reported rather than obeyed: the knob keeps its default (the pan, for
+        // the second one) and the line that failed changes nothing.
+        let (settings, notes) = Settings::parse("knob9 = pan\nknob2 = sideways\n");
+        assert_eq!(settings.knob_bindings()[1].action, crate::knobs::KnobAction::Pan);
+        assert_eq!(
+            settings.knob_bindings()[2].action,
+            crate::knobs::KnobAction::None,
+            "a knob number that is not one must not quietly become another knob"
+        );
+        assert_eq!(notes.len(), 2, "both lines should be said out loud: {notes:?}");
+        // The steps are settings too, and anything unusable falls back rather
+        // than being obeyed: no zero, no negatives, nothing above the travel.
+        assert!(
+            (Settings::parse("knob2_step = 0.05\n").0.knob_bindings()[1].step - 0.05).abs() < 1e-6
+        );
+        assert_eq!(
+            Settings::default().knob_bindings()[0].step,
             crate::knobs::DEFAULT_VOLUME_STEP
         );
         assert_eq!(
-            Settings::parse("knob1_step = 7\n").0.knob1_step(),
+            Settings::parse("knob1_step = 0\n").0.knob_bindings()[0].step,
             crate::knobs::DEFAULT_VOLUME_STEP
+        );
+        assert_eq!(
+            Settings::parse("knob1_step = 7\n").0.knob_bindings()[0].step,
+            crate::knobs::DEFAULT_VOLUME_STEP
+        );
+        // Pan has a default of its own: the V-Pot's scale, not the fader's.
+        assert_eq!(
+            Settings::parse("knob2 = pan\n").0.knob_bindings()[1].step,
+            crate::knobs::DEFAULT_PAN_STEP
         );
         // And the SHIFT step, which defaults to the fine hand rather than to
         // doing nothing at all.
         assert_eq!(
-            Settings::default().knob1_step_shift(),
+            Settings::default().knob_bindings()[0].step_shift,
             crate::knobs::DEFAULT_SHIFT_STEP
         );
-        assert!((Settings::parse("knob1_step_shift = 0.001\n").0.knob1_step_shift() - 0.001).abs() < 1e-7);
+        assert!(
+            (Settings::parse("knob8_step_shift = 0.001\n").0.knob_bindings()[7].step_shift - 0.001)
+                .abs()
+                < 1e-7
+        );
         assert_eq!(
-            Settings::parse("knob1_step_shift = -1\n").0.knob1_step_shift(),
+            Settings::parse("knob1_step_shift = -1\n").0.knob_bindings()[0].step_shift,
             crate::knobs::DEFAULT_SHIFT_STEP
         );
         assert_eq!(
@@ -279,9 +374,7 @@ mod tests {
                 uinput: Some("/dev/uinput".to_string()),
                 mapping: Some("mappings/reaper.map".to_string()),
                 mcu: Some("Midi Through".to_string()),
-                knob1: None,
-                knob1_step: None,
-                knob1_step_shift: None,
+                knobs: Default::default(),
             }
         );
     }

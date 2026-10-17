@@ -896,6 +896,8 @@ mod tests {
             bank: vec![Channel {
                 name: "ONE".to_string(),
                 fader: 0.5,
+                pan: 0.5,
+                pan_known: true,
                 mute: false,
                 solo: false,
             }],

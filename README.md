@@ -224,13 +224,22 @@ mask, not the group's rights, so `ls -l` is misleading). Clear leftovers with
 
 With the display taken over, the eight knobs are not on the keyboard's MIDI port at all
 (`doc/Captured_Codes.md`): every detent is in the HID report instead, two little-endian bytes per knob,
-stepping 8 per detent. `komplement` reads them there, and `-d` says each movement out loud
-(`[knobs] Knob 3: +1`).
+stepping 8 per detent. `komplement` reads them there and says nothing about it - a quiet keyboard
+stays quiet, and the panel is where the state is read.
 
-By default the **first knob moves the current track's level**: 1% of the travel per detent, applied to
-whatever level the DAW last reported for that track - never an absolute jump - and sent back as the
-message a surface's fader sends (pitch bend on the track's strip). For that to arrive, the Mackie
-Control surface's MIDI **input** in the DAW has to be our own port:
+By default the **first knob moves the current track's level**, the **second its pan** and the
+**eighth the master level** - and the settings can give any knob a job of its own: `knob3 = pan`,
+`knob1 = none` leaves one read but silent. A pan counts the other way round from the levels (the
+V-Pot's scale runs opposite to our detents) and, because the DAW never sends a pan back - only the
+ring around its V-Pot, twelve dots wide - the tool starts from what that ring says and corrects
+itself from the controller value the moment the DAW sends one. Its detent is 0.01: below 1/127 the
+step falls between the controller's own values and half the turns are swallowed.
+
+Every one of them is **relative to what the DAW last reported** - the level or the pan the knob finds
+is where it starts from, never an absolute jump - and each is sent as the message a surface's own
+control sends: a fader as pitch bend on the track's strip, a pan as that strip's V-Pot controller, the
+master as the ninth fader. For any of that to arrive, the Mackie Control surface's MIDI **input** in
+the DAW has to be our own port:
 
 ```
 $ ./result/bin/komplement -m ./mappings/reaper.map -p 1740 -X auto -S page-track:med -T h:m:s:f
@@ -239,10 +248,9 @@ For the knobs to reach the DAW, the Mackie Control surface's MIDI *input* must b
 Drawing page "track" at "medium" size, ...
 ```
 
-The surface's **output** is left alone: that is the port the display is written from. `knob1 = none` in
-the settings leaves the knobs read but silent, and the two measured numbers behind the reading (8 per
-detent, positions wrapping inside 1000) are the first thing to change for a keyboard that counts
-differently - `knobs.rs`.
+`knob1 = none` in the settings leaves the knobs read but silent, and the two measured numbers behind
+the reading (8 per detent, positions wrapping inside 1000) are the first thing to change for a
+keyboard that counts differently - `knobs.rs`.
 
 ### When the DAW runs on PipeWire or JACK
 
@@ -291,10 +299,14 @@ One `key = value` per line, `#` starts a comment, and a value may be quoted to h
 pid = 1740
 # the port the DAW's control surface writes to (see -l and -X)
 # mcu = Midi Through
-# the first knob moves the current track's level over MCU; `none` reads them silently
+# what each knob does: volume (the current track's level), pan, master, or none
 # knob1 = volume
-# how much of the full travel one detent is worth (default 0.02 = fifty detents)
+# knob2 = pan
+# knob8 = master
+# how much of the full travel one detent is worth (levels: 0.02 = fifty detents)
 # knob1_step = 0.02
+# a pan is set by ear, and its own default is twice as fine as a level's
+# knob2_step = 0.01
 # the same with SHIFT held on the keyboard (default 0.005 = fine adjustment)
 # knob1_step_shift = 0.005
 # mapping = /home/andy/projects/RUST/kontrol-rs/mappings/reaper.map

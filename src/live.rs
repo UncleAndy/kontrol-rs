@@ -164,17 +164,10 @@ pub fn run(
     // one program, one HID device, the panel and the keys at once, with the keys
     // first (a report is read and answered before any frame is drawn).
     mut keys: Option<Keys<'_>>,
-    // Whether the first knob drives the current track's level over MCU: the port
-    // is a source as well as a listener, and this is the one thing the tool says
-    // back to the DAW.
-    volume_by_knob: bool,
-    // How much of the travel one detent is worth. A setting rather than a
-    // constant: the right size is a matter of hands, and the alternative is a
-    // rebuild for every change of mind.
-    volume_step: f32,
-    // The same with SHIFT held: the keyboard's own modifier, so a level can be
-    // set coarsely and then to the decibel without leaving the knob.
-    volume_step_shift: f32,
+    // What each knob does and how big its detent is: from the settings, because
+    // the right size is a matter of hands, and the alternative is a rebuild for
+    // every change of mind.
+    bindings: [crate::knobs::KnobBinding; crate::knobs::KNOBS],
 ) -> Result<(), String> {
     if !quiet {
         if input.is_self() {
@@ -200,8 +193,11 @@ pub fn run(
             page.name(),
             size.name(),
             layout.name(),
-            if volume_by_knob {
-                "The first knob moves the current track's level; "
+            if bindings
+                .iter()
+                .any(|binding| binding.action != crate::knobs::KnobAction::None)
+            {
+                "The knobs move the DAW's own controls; "
             } else {
                 "Nothing is sent to the DAW; "
             }
@@ -353,15 +349,16 @@ pub fn run(
                     // before anything is drawn, so a turn is visible even when
                     // the panel is busy.
                     let moved = knobs.read(&report[..length]);
-                    if !quiet {
-                        crate::knobs::announce(&moved);
-                    }
-                    if volume_by_knob && moved[0] != 0 {
-                        // The first knob, as a surface's fader moves: relative to
-                        // what the DAW last said, on the strip the current track
-                        // occupies in the bank. Never absolute - the level the
-                        // knob finds is where it starts from.
-                        let (strip, track, fader) = {
+                    // Every knob that moved, sent as the surface's own control
+                    // for what it is bound to - relative to what the DAW last
+                    // said, never absolute: the value the knob finds is where it
+                    // starts from, which is what keeps a track change from
+                    // jumping the level.
+                    let any_binding = bindings
+                        .iter()
+                        .any(|binding| binding.action != crate::knobs::KnobAction::None);
+                    if any_binding && moved.iter().any(|detents| *detents != 0) {
+                        let (strip, fader, pan, master) = {
                             let studio = decoder.studio();
                             let strip = studio
                                 .track_number
@@ -369,24 +366,52 @@ pub fn run(
                                 as usize;
                             (
                                 strip,
-                                studio.track_number,
                                 studio.bank.get(strip).map(|channel| channel.fader),
+                                studio.bank.get(strip).map(|channel| channel.pan),
+                                studio.master_fader,
                             )
                         };
-                        if let Some(fader) = fader {
+                        let shift = crate::engine::shift_pressed(&report[..length]);
+                        for (knob, detents) in moved.iter().enumerate() {
+                            let detents = *detents;
+                            if detents == 0 {
+                                continue;
+                            }
+                            let binding = bindings[knob];
                             // SHIFT on the keyboard is the fine hand, the way it
                             // is everywhere else: the knob keeps its meaning and
                             // only the size of a detent changes.
-                            let step = crate::knobs::volume_step(
-                                crate::engine::shift_pressed(&report[..length]),
-                                volume_step,
-                                volume_step_shift,
-                            );
-                            let fraction = crate::knobs::volume(fader, moved[0], step);
-                            let message = crate::knobs::fader_message(strip as u8, fraction);
+                            let step =
+                                crate::knobs::volume_step(shift, binding.step, binding.step_shift);
+                            let message = match binding.action {
+                                crate::knobs::KnobAction::None => continue,
+                                crate::knobs::KnobAction::Volume => match fader {
+                                    Some(fader) => crate::knobs::fader_message(
+                                        strip as u8,
+                                        crate::knobs::volume(fader, detents, step),
+                                    ),
+                                    // The current track is not one of the eight
+                                    // the bank shows, so it has no strip to move.
+                                    None => continue,
+                                },
+                                crate::knobs::KnobAction::Pan => match pan {
+                                    Some(pan) => crate::knobs::pan_message(
+                                        strip as u8,
+                                        crate::knobs::pan(pan, detents, step),
+                                    ),
+                                    None => continue,
+                                },
+                                crate::knobs::KnobAction::Master => crate::knobs::fader_message(
+                                    crate::knobs::MASTER_CHANNEL,
+                                    crate::knobs::volume(master, detents, step),
+                                ),
+                            };
                             if let Err(err) = input.send(&message) {
                                 if !quiet {
-                                    println!("Moving track {track}'s level failed: {err}");
+                                    println!(
+                                        "Knob {}: sending to the DAW failed: {err}",
+                                        knob + 1
+                                    );
                                 }
                             }
                         }

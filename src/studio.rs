@@ -158,6 +158,14 @@ pub struct Channel {
     pub name: String,
     /// Where the fader sits, 0.0 (bottom) to 1.0 (top).
     pub fader: f32,
+    /// Where the pan sits, 0.0 hard left to 1.0 hard right with 0.5 in the
+    /// middle: the V-Pot's own scale, which is what the DAW sends back for it.
+    pub pan: f32,
+    /// Whether that pan came from the DAW or is still this crate's own guess. A
+    /// strip the DAW has said nothing about must not be moved as if its pan were
+    /// known: that is how a hard-panned track jumps to the middle on the first
+    /// turn of a knob.
+    pub pan_known: bool,
     pub mute: bool,
     pub solo: bool,
 }
@@ -167,6 +175,11 @@ impl Channel {
         Channel {
             name: name.to_string(),
             fader,
+            // Until the DAW says otherwise: the middle, which is where a channel
+            // that has never been panned sits.
+            pan: 0.5,
+            // Nobody has said where it stands yet.
+            pan_known: false,
             mute,
             solo,
         }
@@ -237,6 +250,9 @@ pub struct Studio {
     pub volume_fraction: f32,
     pub pan: String,
     pub pan_fraction: f32,
+    /// Where the master fader sits, 0.0 to 1.0. The ninth fader of the stream:
+    /// our strips are the eight channels, so the master is the one left over.
+    pub master_fader: f32,
     pub mute: bool,
     pub solo: bool,
     pub armed: bool,
@@ -363,6 +379,9 @@ impl Studio {
             volume_fraction: 0.0,
             pan: String::new(),
             pan_fraction: 0.5,
+            // A plausible master to start moving from; the DAW's own echo
+            // replaces it as soon as it says anything.
+            master_fader: 0.75,
             mute: false,
             solo: false,
             armed: false,
@@ -391,6 +410,9 @@ impl Studio {
             volume_fraction: 0.62,
             pan: "C".to_string(),
             pan_fraction: 0.5,
+            // A plausible master to start moving from; the DAW's own echo
+            // replaces it as soon as it says anything.
+            master_fader: 0.75,
             mute: false,
             solo: true,
             armed: true,
