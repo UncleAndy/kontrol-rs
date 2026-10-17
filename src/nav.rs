@@ -16,24 +16,7 @@
 
 use crate::font;
 use crate::screen::{self, Frame, WIDTH};
-
-/// What the transport is doing.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Transport {
-    Stopped,
-    Playing,
-    Recording,
-}
-
-impl Transport {
-    fn word(self) -> &'static str {
-        match self {
-            Transport::Stopped => "STOP",
-            Transport::Playing => "PLAY",
-            Transport::Recording => "REC",
-        }
-    }
-}
+use crate::studio::Transport;
 
 /// Everything the screen shows. Strings are already formatted for display: the
 /// feed from the DAW decides the wording, the layout only decides the placing.

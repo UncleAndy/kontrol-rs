@@ -38,14 +38,22 @@ fn keys_of(table: &MappingTable, name: &str, layer: Layer) -> Vec<String> {
 fn the_reaper_mapping_parses_completely() {
     let table = read("mappings/reaper.map");
 
-    // Every row the file contains, in both layers, ends up in the table: 35
-    // plain rows plus the 27 `Shift+...` rows. (62 is also the number of
-    // "mapped to" lines the C tool prints for this file - the port's output is
-    // byte-identical to it.)
+    // Every row the file contains, in both layers, ends up in the table: 33
+    // plain rows plus the 27 `Shift+...` rows. The C tool prints 35 for its copy
+    // of this file - the two rows for Page Left and Page Right were taken out on
+    // purpose, because those two buttons belong to the screen daemon that pages
+    // the display with them (doc/display-interface.md), and one press should not
+    // both page the screen and toggle mute in the DAW.
     let normal = (0..42).filter(|index| table.is_mapped(*index, Layer::Normal)).count();
     let shifted = (0..42).filter(|index| table.is_mapped(*index, Layer::Shifted)).count();
-    assert_eq!((normal, shifted), (35, 27));
-    assert_eq!(mapped_count(&table), 35);
+    assert_eq!((normal, shifted), (33, 27));
+    assert_eq!(mapped_count(&table), 33);
+
+    // The two buttons beside the display are free, in both layers.
+    assert_eq!(get_button_index("Page Left"), Some(14));
+    assert_eq!(get_button_index("Page Right"), Some(15));
+    assert!(!table.is_mapped(14, Layer::Any));
+    assert!(!table.is_mapped(15, Layer::Any));
 
     // Turning the 4D dial jogs the cursor: fast (Shift held inside the mapping)
     // and precise (bare arrow keys) in the shifted layer.

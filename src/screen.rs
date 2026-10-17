@@ -53,8 +53,10 @@ pub const MIDI_MODE: [u8; 3] = [0xa0, 0x07, 0x00];
 
 pub type Frame = [u8; FRAME_BYTES];
 
-/// The states `-S` knows, in the order the help lists them.
-pub const STATE_NAMES: [&str; 16] = [
+/// The states `-S` knows, in the order the help lists them. The four `page-`
+/// states are the real pages and take a size after a colon; the four `nav`
+/// states are the earlier drafts of the same screens.
+pub const STATE_NAMES: [&str; 20] = [
     "on",
     "off",
     "top",
@@ -69,6 +71,10 @@ pub const STATE_NAMES: [&str; 16] = [
     "navmed",
     "navmid",
     "navbig",
+    "page-transport",
+    "page-track",
+    "page-tracks",
+    "page-general",
     "glyphs",
     "text60",
 ];
@@ -213,16 +219,15 @@ pub fn draw_text_scaled(frame: &mut Frame, x: usize, row: usize, text: &str, sca
     }
 }
 
-/// Draws a bar: an outline with a filled part, in pixels, inside one page.
-/// `fraction` is where the value sits in its range, so a bar of a parameter at
-/// 0.62 is filled a little over half way.
+/// Draws a bar: an outline with a filled part, in pixels. `fraction` is where the
+/// value sits in its range, so a bar of a parameter at 0.62 is filled a little
+/// over half way. The bar may cross a page boundary - a line of the medium or
+/// large size starts at a row that is not a multiple of eight.
 pub fn draw_bar(frame: &mut Frame, x: usize, row: usize, width: usize, height: usize, fraction: f32) {
     if width == 0 || height == 0 || row >= PAGES * 8 || x >= WIDTH {
         return;
     }
 
-    let page = row / 8;
-    let shift = row % 8;
     let fraction = fraction.clamp(0.0, 1.0);
     let filled = ((width as f32 - 2.0) * fraction).round() as usize;
 
@@ -232,21 +237,73 @@ pub fn draw_bar(frame: &mut Frame, x: usize, row: usize, width: usize, height: u
             break;
         }
 
-        let mut bits = 0u8;
         for offset in 0..height {
-            let row_in_bar = shift + offset;
-            if row_in_bar >= 8 {
+            let y = row + offset;
+            if y >= PAGES * 8 {
                 break;
             }
 
             let edge = offset == 0 || offset == height - 1 || column == 0 || column == width - 1;
             let inside = column >= 1 && column <= filled;
             if edge || inside {
-                bits |= 1 << row_in_bar;
+                frame[(y / 8) * PAGE_BYTES + target] |= 1 << (y % 8);
             }
         }
+    }
+}
 
-        frame[page * PAGE_BYTES + target] |= bits;
+/// Draws a fader: an outline with the level filled from the bottom, so a channel
+/// at 0.7 stands seven tenths of the way up its travel. Like `draw_bar` it may
+/// cross a page boundary. The horizontal flavour is for parameters that read
+/// left to right, this one for levels.
+pub fn draw_vbar(frame: &mut Frame, x: usize, row: usize, width: usize, height: usize, fraction: f32) {
+    if width == 0 || height == 0 || row >= PAGES * 8 || x >= WIDTH {
+        return;
+    }
+
+    let fraction = fraction.clamp(0.0, 1.0);
+    let filled = ((height as f32 - 2.0) * fraction).round() as usize;
+
+    for column in 0..width {
+        let target = x + column;
+        if target >= WIDTH {
+            break;
+        }
+
+        for offset in 0..height {
+            let y = row + offset;
+            if y >= PAGES * 8 {
+                break;
+            }
+
+            // 0 is the bottom row of the bar, 1 the one above it, and so on.
+            let from_bottom = height - 1 - offset;
+            let edge = offset == 0 || offset == height - 1 || column == 0 || column == width - 1;
+            let inside =
+                column >= 1 && column <= width - 2 && from_bottom >= 1 && from_bottom <= filled;
+            if edge || inside {
+                frame[(y / 8) * PAGE_BYTES + target] |= 1 << (y % 8);
+            }
+        }
+    }
+}
+
+/// Fills a plain block of pixels: the mute and solo marks of the mixer page. It
+/// may cross a page boundary as well.
+pub fn fill_rect(frame: &mut Frame, x: usize, row: usize, width: usize, height: usize) {
+    for offset in 0..height {
+        let y = row + offset;
+        if y >= PAGES * 8 {
+            break;
+        }
+
+        for column in 0..width {
+            let target = x + column;
+            if target >= WIDTH {
+                break;
+            }
+            frame[(y / 8) * PAGE_BYTES + target] |= 1 << (y % 8);
+        }
     }
 }
 
@@ -317,8 +374,24 @@ pub fn message_frame() -> Frame {
 
 /// The frame of a named state, or `None` when the name is unknown. `text60` is
 /// not a frame: it clears the pixels and sends the text reports.
+///
+/// A page may name a size after a colon - `page-track:large` - because the size
+/// is what the SHIFT key steps through on the panel.
 pub fn named_frame(name: &str) -> Option<Frame> {
-    match name {
+    let (base, size) = match name.split_once(':') {
+        Some((base, size)) => (base, crate::studio::Size::from_name(size)?),
+        None => (name, crate::studio::Size::Medium),
+    };
+
+    if let Some(page) = crate::studio::Page::from_name(base) {
+        return Some(crate::pages::render(
+            page,
+            &crate::studio::Studio::sample(),
+            size,
+        ));
+    }
+
+    match base {
         "on" => Some(on()),
         "off" => Some(off()),
         "top" => Some(half_height(true)),
@@ -340,11 +413,14 @@ pub fn named_frame(name: &str) -> Option<Frame> {
 
 pub fn state_help() -> String {
     format!(
-        "States: {} (message draws a fixed four-line text; nav is the four-line\n\
-navigation screen, navmed the uniform three-line one in the 7x9 font, navmid the\n\
-three-line one with a double-size value and navbig two double-size lines; glyphs\n\
-shows the whole 7x9 font, text60 clears the screen and sends the text reports\n\
-guessed at in doc/mini-screen.txt - measured: it does nothing).",
+        "States: {}.\n\
+        message draws a fixed four-line text. nav, navmed, navmid and navbig are the\n\
+        earlier drafts of the four-line, three-line 7x9, mixed and two-line layouts.\n\
+        page-transport, page-track, page-tracks and page-general are the real pages,\n\
+        drawn from a sample state; each takes a size after a colon, page-track:large,\n\
+        one of small, medium or large (medium by default). glyphs shows the whole 7x9\n\
+        font, text60 clears the screen and sends the text reports guessed at in\n\
+        doc/mini-screen.txt - measured: it does nothing.",
         STATE_NAMES.join(", ")
     )
 }

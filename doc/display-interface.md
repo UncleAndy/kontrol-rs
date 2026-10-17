@@ -1,6 +1,8 @@
 # The display interface
 
-**Status:** design, agreed with the owner, **not implemented yet**. Everything marked *measured* comes from `doc/Captured_Codes.md`; everything marked *open* is a question that a capture or a run has to answer before code depends on it.
+**Status:** design, agreed with the owner. Everything marked *measured* comes from `doc/Captured_Codes.md`; everything marked *open* is a question that a capture or a run has to answer before code depends on it.
+
+**Step 1 is in place:** the state and the four pages are drawn (`src/studio.rs` for the state, `src/pages.rs` for the layout) and can be looked at on the panel with `komplement -S page-track:large` and its three siblings, at any of the three sizes, with no DAW involved at all. The sources below are not built yet.
 
 ## Why the DAW cannot simply write text
 
@@ -31,7 +33,7 @@ This is one-way listening: we never answer and never send, so we cannot disturb 
 
 Why it is the right first channel: nothing has to be installed in the DAW and nothing is tied to a ReaScript API version; the data arrives by itself, which matters because a separate process could not poll Reaper for it any other way; it is a de-facto standard, so Ardour, Mixbus, Bitwig, Cubase and others will drive the same screen; and it carries exactly the kind of "state" the pages want to show.
 
-Its limits, stated plainly: MCU carries MCU's own vocabulary and no arbitrary text (that is what the FIFO is for); names arrive eight tracks at a time, so a list of more tracks needs us to send bank-up/bank-down notes back; **tempo is not in MCU at all**, so a tempo field would need OSC or a script; and SysEx has to actually pass through the port, which on Linux is not a given and is to be verified before anything relies on track names.
+Its limits, stated plainly: MCU carries MCU's own vocabulary and no arbitrary text (that is what the FIFO is for); names arrive eight tracks at a time, so a list of more tracks needs us to send bank-up/bank-down notes back; **tempo is not in MCU at all**, so a tempo field would need OSC or a script - moot, since it is not wanted on the screen; and SysEx has to actually pass through the port, which on Linux is not a given and is to be verified before anything relies on track names.
 
 The exact opcodes are **open**: they will be read from a capture of Reaper's MCU output on a virtual port, the same way the keyboard's own protocol was measured. Nothing in this interface is guessed from documentation alone.
 
@@ -56,7 +58,7 @@ Plain data, filled field by field by whichever source knows that field, so a mis
 - the selected track: number, name, volume, pan, mute, solo, record-arm;
 - transport: position, playing/stopped, recording, loop and click states;
 - the current MCU bank: its eight tracks with their fader and pan positions and their mute/solo states;
-- per-field freshness: which source wrote it and when, so the screen can show "as of when" and a dead source is visible rather than silently stale.
+- per-field freshness: which source wrote it and when, so the screen can show "as of when" and a dead source is visible rather than silently stale. Not in the state yet: it arrives with the MCU decoder (step 2), because with no sources there is nothing to date.
 
 **Open:** whether MCU reports meters at all, and in what form; whether the daemon has to answer MCU's device-query (some DAWs want a reply before they consider a surface alive; Reaper usually does not); how many tracks the bank view should be able to step through.
 
@@ -73,12 +75,12 @@ A message is text plus two switches: sticky (yes/no) and a lifetime (default a f
 
 Four, in a ring, with the state each one reads:
 
-| # | page | shows | size notes |
+| # | page | shows | notes |
 |---|---|---|---|
-| 1 | transport / time | position, playing/stopped/recording, loop, click | tempo is **open** (not in MCU) |
-| 2 | selected track | number and name, volume, pan, mute/solo/arm | the volume bar is the reason the renderer draws pixels, not characters |
-| 3 | tracks | the current bank's tracks with their flags, as text | stepping banks needs us to send bank notes back |
-| 4 | general info | the bank's eight channels as a bar each with a short label and mute/solo marks, plus a transport row | "something general that Reaper gives over MCU" - the exact contents are the owner's to refine once he sees them on the panel |
+| 1 | transport / time | position, playing/stopped/recording, loop, click | no tempo: the owner does not want it on the screen, and MCU does not carry it anyway |
+| 2 | selected track | number and name, volume, pan, mute/solo/arm | the volume and pan bars are the reason the renderer draws pixels, not characters |
+| 3 | tracks | the bank's tracks with their flags, the selected one marked, as text | the size decides how many of the eight are shown, which is the whole point of the page/size split |
+| 4 | general info | the bank as a mixer: one column per channel with a two-character label, mute and solo marks and a fader filled from the bottom, plus a bottom line with the transport and the bank's numbering | "general information that Reaper gives over MCU", as the owner put it; the only page that is drawn rather than written, and the only one that ignores the size |
 
 The four navigate with the two buttons beside the display: **Page Left is bit 14 (0x40 in `buf[2]`) and Page Right is bit 15 (0x80)**, both measured, both HID-only, one packet per press and one per release, and identical whether the display is Native Instruments' or ours. They do not auto-repeat, so accelerated paging would need hold detection here; not wanted yet.
 
@@ -88,7 +90,7 @@ The four navigate with the two buttons beside the display: **Page Left is bit 14
 
 While the daemon runs, it owns the display: `a0 03 04` after opening the device, `a0 07 00` on every exit path, including SIGINT and SIGTERM, so the keyboard's own logic comes back. If the device cannot be opened the daemon says why and exits; if it cannot open `/dev/uinput` it does not need it - the daemon never sends keystrokes.
 
-`komplement` (keystrokes) and the daemon can read the same HID interface at the same time. The one collision to settle: `mappings/reaper.map` still maps **Page Left** to Alt+M and **Page Right** to Alt+Shift+S, so pressing a page button while the daemon runs would both page the screen and toggle mute in Reaper. The mapping stays as it is for now, and should be commented out before the daemon is run permanently. **Open, for the owner.**
+`komplement` (keystrokes) and the daemon can read the same HID interface at the same time. The one collision there was is settled: `mappings/reaper.map` no longer maps **Page Left** or **Page Right** at all, so the two buttons belong to the daemon alone and one press cannot both page the screen and toggle mute in the DAW. (They used to be mapped as Alt+M and Alt+Shift+S under the inherited names Mute and Solo, which this keyboard does not have.)
 
 ## Redraw policy
 
@@ -101,7 +103,7 @@ While the daemon runs, it owns the display: `a0 03 04` after opening the device,
 
 Each step is verifiable on the panel before the next one starts:
 
-1. the model and the four pages, rendered from a canned state - the screen, the sizes and the paging can be judged with no DAW involved at all;
+1. **done** - the model and the four pages, rendered from a canned state: the screen, the sizes and the paging can be judged with no DAW involved at all (`src/studio.rs`, `src/pages.rs`, the `page-*` states of `-S`);
 2. a capture of Reaper's MCU output, then the decoder that fills `Studio` from it - opcodes measured, not guessed;
 3. the FIFO reader and the message overlay;
 4. the daemon: ownership, paging, sizes, the redraw policy, run by hand at first, as a systemd unit later.

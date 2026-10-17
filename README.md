@@ -40,6 +40,13 @@ report mean?") is separated from the device I/O behind a `Sink` trait, so the te
 synthetic reports and check exactly which keys, MMC messages and LED updates come out - no
 keyboard required. `komplement`'s main loop is a thin wrapper around it.
 
+The port also has modules the C tool has no counterpart for, all of them for the keyboard's
+display: `src/screen.rs` (frames, reports and the drawing primitives), `src/font.rs` (the 5x7
+font), `src/font_medium.rs` (the 7x9 font), `src/studio.rs` (the state the screen shows and the
+pages it has), `src/pages.rs` (those pages) and `src/nav.rs` (the earlier drafts of the same
+screens, kept as `-S nav` states until the pages have been judged on hardware). `doc/display-interface.md`
+works out how a DAW is meant to feed them.
+
 ## Building
 
 With NixOS (or any machine with Nix):
@@ -66,7 +73,8 @@ konfigure -q -p presets/basic_cc.pst > my_template.syx   # send it to the keyboa
 `komplement` options: `-m <mapping>` (required to be useful), `-p <productId>`, `-v <vendorId>`,
 `-o <uinput path>`, `-a` (no ALSA port), `-n` (no LED animation), `-q` (quiet), `-d` (dump HID
 reports), `-l` (list the HID devices the system exposes and exit), `-s` (probe the keyboard's
-display), `-h`.
+display), `-x` (take the display over for a capture), `-S <state>` (draw one named state),
+`-h`.
 `konfigure` options: `-p <preset>`, `-o <file>`, `-m <alsa port>`, `-q`, `-h`.
 
 `komplement -l` needs neither a mapping file nor the keyboard: it prints every HID device the
@@ -93,14 +101,23 @@ fully lit, and replugging the keyboard is what clears that.
 
 `komplement -S <state> -p 1740` shows one named state and waits (Enter, or 10 s without a terminal),
 so a state can be looked at or photographed: `on, off, top, bottom, left, right, vstripes, hstripes,
-border, message, nav, navmed, navmid, navbig, glyphs, text60`. `message` draws four lines with the
-built-in 5x7 font (`src/font.rs`, 21 characters per line, lines at pixel rows 0, 8, 16 and 24) and is
-the end-to-end check of the renderer; `nav`, `navmed`, `navmid` and `navbig` draw the navigation
-screen for a sample track in four sizes (laid out in `src/nav.rs`): four small lines with a bar, three
-lines of the medium 7x9 font, three lines with a double-size value, and two double-size lines;
-`glyphs` shows the whole medium font on the panel; `text60` is the text protocol guessed at in
-`doc/mini-screen.txt` - it was measured on hardware and does nothing, so the port does not depend on
-it.
+border, message, nav, navmed, navmid, navbig, page-transport, page-track, page-tracks, page-general,
+glyphs, text60`. `message` draws four lines with the built-in 5x7 font (`src/font.rs`, 21 characters
+per line, lines at pixel rows 0, 8, 16 and 24) and is the end-to-end check of the renderer; `nav`,
+`navmed`, `navmid` and `navbig` draw the earlier drafts of the navigation screen for a sample track
+(laid out in `src/nav.rs`); `glyphs` shows the whole medium font on the panel; `text60` is the text
+protocol guessed at in `doc/mini-screen.txt` - it was measured on hardware and does nothing, so the
+port does not depend on it.
+
+The four `page-` states are the real screen pages (`src/studio.rs` for the state, `src/pages.rs` for
+the layout), drawn from a sample `Studio` so they can be judged without a DAW: `page-transport`,
+`page-track`, `page-tracks` and `page-general`. Each takes a glyph size after a colon -
+`page-track:large`, one of `small` (four 5x7 lines), `medium` (three 7x9 lines) or `large` (two lines
+at double scale) - because the size is what SHIFT plus a page button steps through on the panel. A
+page says what it wants on the screen as a few lines, most important first, and the size decides how
+many of them fit; the general page is the exception, drawn as a mixer of eight channels (label, mute
+and solo marks, a fader filled from the bottom) and ignoring the size. How a DAW is meant to feed all
+this - MCU for states, a FIFO for messages - is worked out in `doc/display-interface.md`.
 
 The medium font (`src/font_medium.rs`, 7x9, sixteen characters per line) is authored as art in
 `tools/font-medium-glyphs.txt` and generated into Rust by `tools/font-medium-table.awk`, which also
