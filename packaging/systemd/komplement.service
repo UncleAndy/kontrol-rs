@@ -1,0 +1,27 @@
+[Unit]
+# The whole machine's surface: a host that is always on, or a keyboard nobody has
+# to log in to use. A desktop session is better served by the user unit
+# (komplement.user.service), which reads ~/.config/komplement/config.
+Description=Komplete Kontrol A-series surface (kontrol-rs)
+After=sound.target systemd-udev-settle.service
+Wants=sound.target
+
+[Service]
+Type=simple
+# The keyboard, /dev/uinput and ALSA's sequencer are the three things this needs.
+# Everything else it might want is a config file, and the unit is told which one.
+ExecStart=/usr/bin/komplement -c /etc/komplement/config
+User=root
+Restart=on-failure
+RestartSec=2s
+
+# A little confinement, none of it in the way of the devices above.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+
+[Install]
+WantedBy=multi-user.target

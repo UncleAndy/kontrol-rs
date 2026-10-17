@@ -131,9 +131,76 @@
         kontrol-rs = mkKontrolRs final;
       };
 
+      # The same surface for one user's session: the package, the config file in
+      # the place a session keeps one, and the service to run it.
+      homeManagerModules.default =
+        { config, lib, pkgs, ... }:
+        let
+          cfg = config.services.kontrol-rs;
+        in
+        {
+          options.services.kontrol-rs = {
+            enable = lib.mkEnableOption "the komplement user service";
+
+            package = lib.mkOption {
+              type = lib.types.package;
+              default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+              description = "The kontrol-rs package to install.";
+            };
+
+            settings = lib.mkOption {
+              type = lib.types.attrsOf (lib.types.oneOf [ lib.types.str lib.types.int ]);
+              default = { };
+              example = {
+                pid = 1740;
+                mcu = "self";
+                knob1 = "volume";
+                knob2 = "pan";
+                knob8 = "master";
+              };
+              description = ''
+                Written out as ~/.config/komplement/config, one `key = value`
+                per line. The tool reports and ignores anything it cannot use.
+              '';
+            };
+
+            restart = lib.mkOption {
+              type = lib.types.bool;
+              default = true;
+              description = "Start it with the session and bring it back if it dies.";
+            };
+          };
+
+          config = lib.mkIf cfg.enable {
+            home.packages = [ cfg.package ];
+
+            xdg.configFile."komplement/config" = lib.mkIf (cfg.settings != { }) {
+              text =
+                lib.concatStringsSep "\n"
+                  (lib.mapAttrsToList (key: value: "${key} = ${toString value}") cfg.settings)
+                + "\n";
+            };
+
+            systemd.user.services.komplement = lib.mkIf cfg.restart {
+              Unit = {
+                Description = "Komplete Kontrol A-series surface (kontrol-rs)";
+                After = [ "sound.target" ];
+                Wants = [ "sound.target" ];
+              };
+              Service = {
+                ExecStart = "${cfg.package}/bin/komplement";
+                Restart = "on-failure";
+                RestartSec = 2;
+              };
+              Install.WantedBy = [ "default.target" ];
+            };
+          };
+        };
+
       # Optional NixOS module: installs the binaries, the udev rules for the
       # keyboard and a rule that lets the `uinput` group write to /dev/uinput
-      # (komplement needs that to synthesise key presses).
+      # (komplement needs that to synthesise key presses), and can run the
+      # surface as a system service.
       nixosModules.default =
         { config, lib, pkgs, ... }:
         let
@@ -178,6 +245,32 @@
               description = "Install the udev rules for the keyboard and /dev/uinput.";
             };
 
+            runAsService = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = ''
+                Run komplement as a system service, for a machine that is always
+                on. A desktop session wants the user unit instead
+                (packaging/systemd/komplement.user.service).
+              '';
+            };
+
+            serviceUser = lib.mkOption {
+              type = lib.types.str;
+              default = "root";
+              description = "User the system service runs as.";
+            };
+
+            configFile = lib.mkOption {
+              type = lib.types.nullOr lib.types.path;
+              default = null;
+              description = ''
+                Config file for the service. The system service has no home of
+                its own to read one from, so without this the tool starts with
+                nothing but its defaults.
+              '';
+            };
+
             loadUinputModule = lib.mkOption {
               type = lib.types.bool;
               default = true;
@@ -207,6 +300,26 @@
             );
 
             users.groups.${cfg.group} = { };
+
+            systemd.services.komplement = lib.mkIf cfg.runAsService {
+              description = "Komplete Kontrol A-series surface (kontrol-rs)";
+              wantedBy = [ "multi-user.target" ];
+              after = [ "sound.target" "systemd-udev-settle.service" ];
+              wants = [ "sound.target" ];
+              serviceConfig = {
+                ExecStart =
+                  "${cfg.package}/bin/komplement"
+                  + lib.optionalString (cfg.configFile != null) " -c ${cfg.configFile}";
+                User = cfg.serviceUser;
+                SupplementaryGroups = [ cfg.group ];
+                Restart = "on-failure";
+                RestartSec = 2;
+                NoNewPrivileges = true;
+                PrivateTmp = true;
+                ProtectSystem = "strict";
+                ProtectHome = "read-only";
+              };
+            };
           };
         };
     };

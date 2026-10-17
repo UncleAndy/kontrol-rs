@@ -1,0 +1,10 @@
+# Access for komplement: the keyboard itself, and uinput, which is how it sends
+# the key presses a DAW never hears from the keyboard's own MIDI port.
+#
+# 17cc is Native Instruments; 1730 is the A25, 1740 the A49. Add a line for a
+# model that is missing, and check your own with `lsusb | grep -i 17cc`.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="17cc", ATTRS{idProduct}=="1730", MODE="0660", GROUP="audio"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="17cc", ATTRS{idProduct}=="1740", MODE="0660", GROUP="audio"
+KERNEL=="hiddev*", ATTRS{idVendor}=="17cc", ATTRS{idProduct}=="1730", MODE="0660", GROUP="audio"
+KERNEL=="hiddev*", ATTRS{idVendor}=="17cc", ATTRS{idProduct}=="1740", MODE="0660", GROUP="audio"
+KERNEL=="uinput", SUBSYSTEM=="misc", MODE="0660", GROUP="audio", OPTIONS+="static_node=uinput"

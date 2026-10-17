@@ -1,0 +1,15 @@
+#!/bin/sh
+# Inside the AppImage: the same two binaries the packages carry, plus an AppRun
+# that knows where they are, so a single file works on a machine with none of
+# this installed.
+here="$(dirname "$(readlink -f "$0")")"
+
+case "${1:-}" in
+    konfigure) shift; exec "${here}/usr/bin/konfigure" "$@" ;;
+    -h|--help|help)
+        echo "komplement <options>   the surface (options are its own: -h lists them)"
+        echo "komplement konfigure   the keyboard's own settings"
+        exit 0
+        ;;
+    *) exec "${here}/usr/bin/komplement" "$@" ;;
+esac

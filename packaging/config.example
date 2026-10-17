@@ -1,0 +1,21 @@
+# komplement: what the tool reads when it is started with no options.
+# Every line is optional, and a value that cannot be used is reported and
+# ignored rather than obeyed.
+#
+# The keyboard, by USB product id: 1740 is the A49, 1730 the A25.
+pid = 1740
+# The mapping: which key of the keyboard does what.
+mapping = /etc/komplement/mappings/reaper.map
+# The DAW's control-surface port. `self` is our own port, which is what a
+# surface is to a DAW, and it keeps Midi Through out of the picture.
+mcu = self
+# What each knob does: volume (the current track's level), pan, master, or none.
+knob1 = volume
+knob2 = pan
+knob8 = master
+# How much of the travel one detent of a level is worth (0.02 = fifty detents).
+knob1_step = 0.02
+# A pan is relative, and its step is in controller steps (0.01 = about one).
+knob2_step = 0.01
+# The same with SHIFT held on the keyboard.
+knob1_step_shift = 0.005

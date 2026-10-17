@@ -1,0 +1,55 @@
+# One description, two packages: `nfpm package -p deb` and `-p rpm`.
+# The version and the architecture come from the environment, so the build script
+# sets them once and both formats agree.
+name: komplement
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: sound
+priority: optional
+maintainer: Andrei Velikoredchanin
+description: |
+  Native Instruments Komplete Kontrol A-series as a control surface: the knobs,
+  the transport over MCU, the keystrokes a DAW does not listen for, and the
+  panel on the keyboard's own screen.
+vendor: UncleAndyV
+homepage: https://github.com/UncleAndyV/kontrol-rs
+license: MIT
+
+contents:
+  - src: staging/komplement
+    dst: /usr/bin/komplement
+    file_info:
+      mode: 0755
+  - src: staging/konfigure
+    dst: /usr/bin/konfigure
+    file_info:
+      mode: 0755
+  - src: packaging/systemd/komplement.service
+    dst: /usr/lib/systemd/system/komplement.service
+  - src: packaging/systemd/komplement.user.service
+    dst: /usr/share/komplement/komplement.user.service
+  - src: packaging/udev/99-komplement.rules
+    dst: /usr/lib/udev/rules.d/99-komplement.rules
+  - src: packaging/config.example
+    dst: /etc/komplement/config.example
+    type: config|noreplace
+  - src: mappings
+    dst: /etc/komplement/mappings
+  - src: README.md
+    dst: /usr/share/doc/komplement/README.md
+
+scripts:
+  postinstall: packaging/scripts/postinstall.sh
+  preremove: packaging/scripts/preremove.sh
+
+# What the tool links against, named the way each family names it.
+depends:
+  - libasound2
+  - libusb-1.0-0
+overrides:
+  rpm:
+    depends:
+      - alsa-lib
+      - libusb1
+      - hidapi

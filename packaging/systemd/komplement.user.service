@@ -1,0 +1,22 @@
+[Unit]
+# The same tool inside one session: it reads ~/.config/komplement/config and it
+# stops when the session does. Install it as
+#   ~/.config/systemd/user/komplement.service
+# and start it with `systemctl --user enable --now komplement`.
+Description=Komplete Kontrol A-series surface (kontrol-rs)
+After=sound.target
+Wants=sound.target
+
+[Service]
+Type=simple
+# No path is spelled out: the binary has to be on the session's PATH, which is
+# what a distribution package or a home-manager install both arrange.
+ExecStart=komplement
+# A tool that cannot find its keyboard must come back when the keyboard is
+# plugged in again, rather than stay dead until someone notices.
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

@@ -470,6 +470,30 @@ was attached while porting).
 Options: `enable`, `package`, `group` (default `audio`), `productIds` (default `1730`, `1740`),
 `installUdevRules`, `loadUinputModule`.
 
+## Service and packages
+
+`packaging/` holds both ways of running this on a machine that is not a
+development checkout: `systemd/` has a **system** unit (the whole machine, with
+`User=` and the keyboard's group set by the caller) and a **user** unit (one
+session, reading `~/.config/komplement/config`), `udev/` the rule that grants
+the group `audio` access to the keyboard and to `/dev/uinput`, `nfpm.yaml` a
+single description that makes both a `.deb` and an `.rpm`, and
+`build-packages.sh` / `release.sh` build those and an AppImage from the flake's
+own binaries:
+
+```
+./packaging/release.sh 0.2.0     # dist/*.deb, *.rpm, *.AppImage + what to run to publish
+```
+
+Neither script tags nor uploads anything - that stays a person's call.
+`packaging/README.md` has the details, including where each file goes.
+
+The two modules cover the same ground on NixOS: `nixosModules.default` installs
+the binaries, the udev rules, loads `uinput` and - with `runAsService = true`,
+`serviceUser` and `configFile` - runs the system service, while
+`homeManagerModules.default` writes `~/.config/komplement/config` from its
+`settings` attribute and runs the user service.
+
 ## License
 
 `LICENSE` in this repository is the original MIT one (© Andrey Velikoredchanin). Note that the
