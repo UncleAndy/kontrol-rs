@@ -267,3 +267,46 @@ that speaks first with `0x01`.
    controllers and virtual serial queues choke otherwise. **[TouchMCU]**
 4. **Fader fighting:** drop inbound fader positions for a strip that reads as touched. **[TouchMCU]**
 5. **Meters are one byte of two nibbles, not two messages** - see section 5. **[measured]**
+
+## 10. Per-DAW variants (what actually differs)
+
+TouchMCU ships an overlay per DAW (`touchmcu/overlays/`, eleven of them). Read carefully, they are
+**labels for the user interface, not protocol maps**: each is 103 lines of strings saying what to
+print on a button, and not one of them changes a note, a controller or a byte. A DAW's "variant" is
+therefore not a different wire format - it is the same MCU canon with different meanings attached to
+the same buttons. That is good news for an adaptation: the protocol layer stays one thing.
+
+Target list, straight from the overlays: Default · Ableton · Adobe Audition · Digital Performer ·
+Pro Tools · Reason · Sonar · Soundscape · Cubase/Nuendo · Studio One · Tracktion.
+
+What they show about the assignment row (notes `0x28`-`0x2D`, canonically `track | send | pan |
+plugin | eq | instruments`):
+
+| DAW | track | send | pan | plugin | eq | instr | remarks |
+|---|---|---|---|---|---|---|---|
+| Default | Track | Send | Pan | Plugin | EQ | Instr | |
+| Ableton | I/O | Send | Pan | Plugin | `< PG` | `PG >` | Global View = Return; no name/value zone |
+| Audition | - | - | Pan | - | EQ | - | Flip = 1-8, Global View = 121-128 |
+| Digital Performer | Mode | Send | Pan | FX | - | Preset | |
+| Pro Tools | Pan | Plugin | Assign | Send | In | Out | the row is re-purposed wholesale |
+| Reason | 1 | 2 | Pan | Ret | Treble | Bass | the row is Reason's channel strip EQ |
+| Sonar | Track | Send | Pan | Plugin | EQ | Comp | no function keys at all |
+| Soundscape | I/O | Send | Pan | Plugin | EQ | Dyn | |
+| Cubase/Nuendo | Up | Down | Pan | - | EQ | Fx/Aux | Global View = Edit |
+| Studio One | Lp In | Lp Out | Rec T | Layers | Mix | Panel | the bank row reads "Recording" |
+| Tracktion | Pan | Aux | Plugin | Marker | Page L | Page R | |
+
+What to take from that when adapting:
+
+- **The bytes do not change.** Keep to the canon and let the *mapping* say what a key means - which is
+  what this project's `.map` files are for. A per-DAW overlay in our tool is a mapping file, not a
+  branch inside the protocol code.
+- **Some buttons are simply unused.** A dash above means the DAW leaves that button alone; a surface
+  that insists on lighting it will look wrong, and one that expects traffic from it will wait forever.
+- **Function keys are not universal** - Sonar has none - so never make F1-F8 the only route to
+  something.
+- **Global View is a DAW-defined button**, not a protocol one: Return, Edit, Normal, 121-128.
+- **Pro Tools is its own case.** It speaks HUI natively and merely re-labels MCU when emulating it -
+  which matches HUI being a different protocol on the wire (`0x05` device id, different framing).
+- **Display zones differ too.** Ableton's overlay carries no name/value fields, so a panel that
+  assumes track names will always arrive should degrade gracefully rather than show a blank strip.

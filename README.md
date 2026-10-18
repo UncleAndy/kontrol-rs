@@ -495,6 +495,25 @@ the binaries, the udev rules, loads `uinput` and - with `runAsService = true`,
 `homeManagerModules.default` writes `~/.config/komplement/config` from its
 `settings` attribute and runs the user service.
 
+## Protocol reference
+
+The MCU side of this tool - faders, V-Pots and their LED rings, meters, buttons, the LCD SysEx - was
+written against the protocol reference in the TouchMCU project:
+
+- <https://github.com/NicoG60/TouchMCU>
+- the reference itself: <https://github.com/NicoG60/TouchMCU/blob/main/doc/mackie_control_protocol.md>
+
+TouchMCU is a TouchOSC layout with a reverse-engineering write-up of the Mackie Control protocol,
+and that write-up is the most complete account of the wire format we have found: the SysEx command
+table with lengths and directions, the LCD layout, the level table for meter nibbles, the ring
+patterns, the handshake sequence. Our own MIDI captures of Reaper were checked against it, and where
+the two disagreed the disagreement is written down in `doc/mcu_rules_v2.md`.
+
+Note on licensing: TouchMCU is GPL-3.0 and this project is MIT. Nothing was taken from it in code -
+no file, function or line - only protocol facts, which are nobody's property. `doc/mcu_rules_v2.md`
+is our own write-up of those facts, assembled from the reference and from our captures of Reaper; if
+the two ever need keeping strictly apart, treat that file as leaning on a GPL-3 source.
+
 ## License
 
 `LICENSE` in this repository is the original MIT one (© Andrey Velikoredchanin). Note that the
