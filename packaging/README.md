@@ -21,8 +21,22 @@ mappings in `~/.local/share/komplement`. It is not an AppImage, and that is
 deliberate: an AppImage needs FUSE at run time, and the AppImageKit tools
 (`appimagetool`, `appimagekit`) are no longer in nixpkgs; `linuxdeploy`, which is
 still there, cannot read a Nix store binary because it runs `ldd`, which needs a
-normal `/usr`. If you want a real AppImage it has to be built outside Nix, in an
-FHS container with the C toolchain — say the word and there will be a script.
+normal `/usr`.
+
+A real AppImage therefore has its own script, `packaging/appimage.sh`, which
+builds it inside a `buildFHSEnv` and packs it with `appimagetool` fetched from
+the AppImage project's own releases (nixpkgs has neither `appimagetool` nor
+`appimagekit` any more):
+
+```
+./packaging/appimage.sh 0.1.0       # dist/komplement-0.1.0-x86_64.AppImage
+APPIMAGE_EXTRACT_AND_RUN=1 ./dist/komplement-0.1.0-x86_64.AppImage   # without FUSE
+```
+
+It is a separate script rather than part of `release.sh` because it is the one
+step that may need a second look at your machine: three of its four stages are
+measured (the FHS environment, `strip`, the icon), and the last one - the pack
+itself - has not been run here.
 
 ## The service
 

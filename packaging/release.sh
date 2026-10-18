@@ -12,15 +12,25 @@ VERSION="${1:?usage: ./packaging/release.sh <version>}"
 
 cat <<EOF
 
-Build is done. To publish, whichever way you prefer:
+Build is done. To publish, whichever of these this machine has:
 
+  # gh out of nixpkgs, without putting it on your PATH first - the one that
+  # works on NixOS as it comes
   git tag -a v${VERSION} -m "komplement ${VERSION}"
   git push origin v${VERSION}
-  gh release create v${VERSION} \\
-      dist/*.deb dist/*.rpm dist/*.AppImage \\
+  nix shell nixpkgs#gh --command gh release create v${VERSION} \\
+      dist/*.deb dist/*.rpm dist/*.run \\
       --title "komplement ${VERSION}" --notes-file CHANGELOG.md
 
-  # or drag dist/* onto the release page yourself
+  # or, with gh already installed
+  gh release create v${VERSION} dist/* --title "komplement ${VERSION}"
+
+  # or with nothing but curl and a token - no gh anywhere
+  GH_TOKEN=... ./packaging/publish-curl.sh ${VERSION}
+
+  # or by hand: push the tag, open
+  #   https://github.com/UncleAndyV/kontrol-rs/releases/new?tag=v${VERSION}
+  # and drag dist/*.deb, *.rpm and *.run onto it
 
 Nix users need no package at all:
 

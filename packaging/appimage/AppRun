@@ -1,0 +1,9 @@
+#!/bin/sh
+# Inside an AppImage: the two binaries, and nothing else to work out. (The
+# portable .run has a different header - it carries a payload and unpacks it.)
+here="$(dirname "$(readlink -f "$0")")"
+
+case "${1:-}" in
+    konfigure) shift; exec "${here}/usr/bin/konfigure" "$@" ;;
+    *) exec "${here}/usr/bin/komplement" "$@" ;;
+esac

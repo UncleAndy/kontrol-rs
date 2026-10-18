@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=komplement
+Comment=Komplete Kontrol A-series control surface
+Icon=komplement
+Exec=komplement
+Categories=Audio;Music;
+Terminal=true
