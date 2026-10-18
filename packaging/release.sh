@@ -10,6 +10,14 @@ VERSION="${1:?usage: ./packaging/release.sh <version>}"
 
 ./packaging/build-packages.sh "${VERSION}"
 
+# The AppImage is the fourth file, and the one step that needs an FHS
+# environment, so it is allowed to fail without taking the other three with it.
+# `SKIP_APPIMAGE=1 ./packaging/release.sh ...` leaves it out entirely.
+if [ "${SKIP_APPIMAGE:-0}" != "1" ]; then
+    ./packaging/appimage.sh "${VERSION}" \
+        || echo "The AppImage step failed; deb, rpm and .run are built." >&2
+fi
+
 cat <<EOF
 
 Build is done. To publish, whichever of these this machine has:

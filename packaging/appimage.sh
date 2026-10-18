@@ -24,8 +24,10 @@ case "$(uname -m)" in
 esac
 echo "komplement ${VERSION} for ${ARCH}"
 
-# The binaries, out of the flake, as everywhere else.
-rm -rf dist staging
+# The binaries, out of the flake, as everywhere else. dist/ is deliberately left
+# alone: an AppImage is one more file beside the deb, the rpm and the .run, not a
+# replacement for them.
+rm -rf staging
 mkdir -p dist staging
 STORE="$(nix build --no-link --print-out-paths .#default | head -1)"
 cp "${STORE}/bin/komplement" "${STORE}/bin/konfigure" staging/
