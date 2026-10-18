@@ -478,11 +478,12 @@ development checkout: `systemd/` has a **system** unit (the whole machine, with
 session, reading `~/.config/komplement/config`), `udev/` the rule that grants
 the group `audio` access to the keyboard and to `/dev/uinput`, `nfpm.yaml` a
 single description that makes both a `.deb` and an `.rpm`, and
-`build-packages.sh` / `release.sh` build those and an AppImage from the flake's
-own binaries:
+`build-packages.sh` / `release.sh` build those and one portable file (a shell
+header with a tar.gz payload appended - not an AppImage, and
+`packaging/README.md` says why) from the flake's own binaries:
 
 ```
-./packaging/release.sh 0.2.0     # dist/*.deb, *.rpm, *.AppImage + what to run to publish
+./packaging/release.sh 0.2.0     # dist/*.deb, *.rpm, *.run + what to run to publish
 ```
 
 Neither script tags nor uploads anything - that stays a person's call.

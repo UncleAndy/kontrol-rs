@@ -1,15 +1,44 @@
 #!/bin/sh
-# Inside the AppImage: the same two binaries the packages carry, plus an AppRun
-# that knows where they are, so a single file works on a machine with none of
-# this installed.
-here="$(dirname "$(readlink -f "$0")")"
+# The header of the portable bundle - komplement-<version>-<arch>.run - to which
+# the tar.gz payload is appended at build time. One file, no package manager, no
+# FUSE: it unpacks into a directory of its own and runs the tool from there.
+#
+# An AppImage proper would need FUSE at run time and the AppImageKit tools, which
+# nixpkgs no longer carries; linuxdeploy, which it does carry, cannot read Nix
+# store binaries (it runs ldd, which needs a normal /usr). This does the same job
+# for a machine that has neither this installed nor a session to speak of.
+set -e
+
+SIZE=@PAYLOAD_BYTES@
+SELF="$(readlink -f "$0")"
+DIR="${TMPDIR:-/tmp}/komplement-$(id -u)"
+
+if [ ! -f "${DIR}/.unpacked" ]; then
+    rm -rf "${DIR}"
+    mkdir -p "${DIR}"
+    # Gzipped payload, or a plain one: whatever this build appended. A machine
+    # without gzip still unpacks a payload that was never compressed.
+    if ! tail -c "${SIZE}" "${SELF}" | tar xz -C "${DIR}" 2>/dev/null; then
+        rm -rf "${DIR}"
+        mkdir -p "${DIR}"
+        tail -c "${SIZE}" "${SELF}" | tar x -C "${DIR}"
+    fi
+    : > "${DIR}/.unpacked"
+fi
 
 case "${1:-}" in
-    konfigure) shift; exec "${here}/usr/bin/konfigure" "$@" ;;
-    -h|--help|help)
-        echo "komplement <options>   the surface (options are its own: -h lists them)"
-        echo "komplement konfigure   the keyboard's own settings"
+    konfigure) shift; exec "${DIR}/bin/konfigure" "$@" ;;
+    install)
+        # What a person would otherwise do by hand: put both binaries on the
+        # PATH and the mappings where the config file points at.
+        target="${2:-$HOME/.local/bin}"
+        mkdir -p "${target}" "$HOME/.local/share/komplement"
+        cp "${DIR}/bin/komplement" "${DIR}/bin/konfigure" "${target}/"
+        cp -r "${DIR}/share/komplement/mappings" "$HOME/.local/share/komplement/"
+        echo "Installed to ${target}. The mappings are in ~/.local/share/komplement/mappings."
         exit 0
         ;;
-    *) exec "${here}/usr/bin/komplement" "$@" ;;
+    *)
+        exec "${DIR}/bin/komplement" "$@"
+        ;;
 esac

@@ -3,7 +3,7 @@
 #
 #   dist/komplement_<version>_<arch>.deb
 #   dist/komplement-<version>.<arch>.rpm
-#   dist/komplement-<version>-<arch>.AppImage
+#   dist/komplement-<version>-<arch>.run      (one file, unpacks and runs)
 #
 #   ./packaging/build-packages.sh 0.2.0
 #
@@ -35,27 +35,24 @@ export VERSION ARCH
 nix shell nixpkgs#nfpm --command nfpm package -f packaging/nfpm.yaml -p deb -t dist/
 nix shell nixpkgs#nfpm --command nfpm package -f packaging/nfpm.yaml -p rpm -t dist/
 
-# The AppImage: the binaries, the mappings, and an AppRun that knows both.
-APPDIR="${PWD}/staging/komplement.AppDir"
-mkdir -p "${APPDIR}/usr/bin" "${APPDIR}/usr/share/komplement"
-cp staging/komplement staging/konfigure "${APPDIR}/usr/bin/"
-cp -r mappings "${APPDIR}/usr/share/komplement/"
-cp packaging/AppRun "${APPDIR}/AppRun"
-chmod +x "${APPDIR}/AppRun"
-cat > "${APPDIR}/komplement.desktop" <<'EOF'
-[Desktop Entry]
-Type=Application
-Name=komplement
-Comment=Komplete Kontrol A-series control surface
-Exec=komplement
-Categories=Audio;Music;
-Terminal=true
-EOF
-nix shell nixpkgs#appimagekit --command \
-    appimagetool "${APPDIR}" "dist/komplement-${VERSION}-${ARCH}.AppImage"
+# The portable bundle: one file that is a shell header with a tar.gz payload
+# appended, for a machine with no package manager and no session to speak of.
+# (A real AppImage needs FUSE and the AppImageKit tools - appimagetool and
+# appimagekit are gone from nixpkgs - and linuxdeploy, which is still there,
+# cannot read a Nix store binary: it runs ldd, which needs a normal /usr.)
+BUNDLE="${PWD}/staging/bundle"
+mkdir -p "${BUNDLE}/bin" "${BUNDLE}/share/komplement"
+cp staging/komplement staging/konfigure "${BUNDLE}/bin/"
+cp -r mappings "${BUNDLE}/share/komplement/"
+tar -czf staging/payload.tar.gz -C "${BUNDLE}" .
+PAYLOAD_BYTES="$(stat -c %s staging/payload.tar.gz)"
+sed "s/@PAYLOAD_BYTES@/${PAYLOAD_BYTES}/" packaging/AppRun \
+    > "dist/komplement-${VERSION}-${ARCH}.run"
+cat staging/payload.tar.gz >> "dist/komplement-${VERSION}-${ARCH}.run"
+chmod +x "dist/komplement-${VERSION}-${ARCH}.run"
 
 echo
 echo "Built:"
-ls -1 dist/*.deb dist/*.rpm dist/*.AppImage 2>/dev/null || true
+ls -1 dist/*.deb dist/*.rpm dist/*.run 2>/dev/null || true
 echo
 echo "To publish: ./packaging/release.sh ${VERSION}"

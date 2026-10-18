@@ -9,10 +9,20 @@ distribution's package manager understands.
 ./packaging/release.sh 0.2.0
 ```
 
-That builds the flake, then `.deb`, `.rpm` and an AppImage into `dist/`, and
-prints the `git tag` / `gh release create` lines to publish them. Nothing is
-tagged or uploaded by the script itself. `build-packages.sh` does the same
-without the instructions at the end.
+That builds the flake, then `.deb`, `.rpm` and a portable single file into
+`dist/`, and prints the `git tag` / `gh release create` lines to publish them.
+Nothing is tagged or uploaded by the script itself. `build-packages.sh` does the
+same without the instructions at the end.
+
+The single file is `komplement-<version>-<arch>.run`: a shell header with a
+tar.gz payload appended. Run it and it unpacks into a directory of its own and
+starts; `./komplement-….run install` puts both binaries in `~/.local/bin` and the
+mappings in `~/.local/share/komplement`. It is not an AppImage, and that is
+deliberate: an AppImage needs FUSE at run time, and the AppImageKit tools
+(`appimagetool`, `appimagekit`) are no longer in nixpkgs; `linuxdeploy`, which is
+still there, cannot read a Nix store binary because it runs `ldd`, which needs a
+normal `/usr`. If you want a real AppImage it has to be built outside Nix, in an
+FHS container with the C toolchain — say the word and there will be a script.
 
 ## The service
 
