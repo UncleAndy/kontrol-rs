@@ -25,6 +25,11 @@ rustc-ice-*.txt
 
 # nix build output symlink
 /result
+/result*
+
+# Release artifacts (the packaging scripts write here) and their staging area
+/dist/
+/staging/
 
 # Capture directories of the measurement scripts (tools/capture-*.sh). What they
 # measured belongs in doc/Captured_Codes.md, not in the repository.

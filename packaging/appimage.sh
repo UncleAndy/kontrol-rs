@@ -43,10 +43,13 @@ if [ ! -x "${TOOL}" ]; then
     chmod +x "${TOOL}"
 fi
 
-# The icon. Put a real one at packaging/komplement.png; without one, this is a
-# plain placeholder so that linuxdeploy has something to accept.
-ICON="packaging/komplement.png"
-if [ ! -e "${ICON}" ]; then
+# The icon. A real one goes at packaging/komplement.png and belongs in the
+# repository; without one, a plain placeholder is drawn into staging/ so that
+# linuxdeploy has something to accept, and nothing generated lands in packaging/.
+ICON="staging/komplement.png"
+if [ -e packaging/komplement.png ]; then
+    cp packaging/komplement.png "${ICON}"
+else
     nix shell nixpkgs#imagemagick --command magick -size 256x256 xc:none \
         -fill '#2b6cb0' -draw 'roundrectangle 8,8 248,248 48,48' \
         -fill white -draw 'circle 128,128 128,58' "${ICON}"
