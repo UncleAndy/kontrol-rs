@@ -61,7 +61,7 @@ and log back in. A distribution that names its group differently should edit
 ## Nix
 
 ```
-nix run github:UncleAndyV/kontrol-rs
+nix run github:UncleAndy/kontrol-rs
 
 # NixOS
 services.kontrol-rs = {

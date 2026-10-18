@@ -37,12 +37,12 @@ Build is done. To publish, whichever of these this machine has:
   GH_TOKEN=... ./packaging/publish-curl.sh ${VERSION}
 
   # or by hand: push the tag, open
-  #   https://github.com/UncleAndyV/kontrol-rs/releases/new?tag=v${VERSION}
+  #   https://github.com/UncleAndy/kontrol-rs/releases/new?tag=v${VERSION}
   # and drag dist/*.deb, *.rpm and *.run onto it
 
 Nix users need no package at all:
 
-  nix run github:UncleAndyV/kontrol-rs
+  nix run github:UncleAndy/kontrol-rs
   # or, in configuration.nix / home.nix:
   services.kontrol-rs.enable = true;
 

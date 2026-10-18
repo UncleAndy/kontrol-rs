@@ -12,8 +12,8 @@ description: |
   Native Instruments Komplete Kontrol A-series as a control surface: the knobs,
   the transport over MCU, the keystrokes a DAW does not listen for, and the
   panel on the keyboard's own screen.
-vendor: UncleAndyV
-homepage: https://github.com/UncleAndyV/kontrol-rs
+vendor: UncleAndy
+homepage: https://github.com/UncleAndy/kontrol-rs
 license: MIT
 
 contents:

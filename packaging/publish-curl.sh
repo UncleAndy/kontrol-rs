@@ -17,7 +17,7 @@ if [ -z "${TOKEN}" ]; then
     exit 1
 fi
 
-REPO="${REPO:-UncleAndyV/kontrol-rs}"
+REPO="${REPO:-UncleAndy/kontrol-rs}"
 TAG="v${VERSION}"
 API="https://api.github.com/repos/${REPO}"
 AUTH=(-H "Authorization: Bearer ${TOKEN}"
