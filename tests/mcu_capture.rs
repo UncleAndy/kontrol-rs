@@ -169,8 +169,28 @@ fn the_decoder_reads_reapers_own_stream() {
         "the fader did not move: {first} then {fader_last}"
     );
 
-    // Meters arrive as aftertouch, one per channel, and are kept.
-    assert!(decoder.levels().iter().any(|level| *level > 0), "no meter levels");
+    // Meters arrive as aftertouch, one per strip, with the strip in the high
+    // nibble of the data byte and the level in the low one. This capture is
+    // silent - every level is zero - so the meaningful assertion is coverage:
+    // all eight strips are addressed, where the older reading piled all of them
+    // onto one strip as a rising level.
+    let meter_strips: std::collections::BTreeSet<u8> = fixture_messages()
+        .iter()
+        .filter_map(|message| match message.as_slice() {
+            [0xd0, data, ..] => Some(data >> 4),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        meter_strips.len(),
+        decoder.levels().len(),
+        "the meters did not address every strip: {meter_strips:?}"
+    );
+    assert!(
+        decoder.levels().iter().all(|level| *level == 0),
+        "the capture is silent, but levels arrived: {:?}",
+        decoder.levels()
+    );
 
     // The DAW's own display arrived as digits, and the twelve of them make the
     // row the panel now shows: ten of the timecode and two of the assignment

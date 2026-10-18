@@ -155,16 +155,24 @@ One meter per strip, sent as **Channel Pressure** (`0xD0`). **[measured]**, stru
 - `0xD0 sv` - the *data* byte carries both: `s` is the strip in the **high nibble** (0-7), `v` is the
   level in the **low nibble**.
 - Do not read the strip from the status byte's channel: Reaper sends every meter as `0xD0` with the
-  strip only in the data. A capture of the initialisation is `d0 0f, d0 1f, d0 2f … d0 7f` - eight
-  strips, each `0xF`, which is "clear overload". **[measured]**
+  strip only in the data - 1350 of them in one four-window capture, and never once on `0xD1`..`0xD7`.
+  The capture's bytes are `D0 00, D0 10, D0 20 … D0 70`: eight strips, each silent, which is what a
+  meter bank looks like when nothing is playing. **[measured]**
+
+  *This one cost a wrong turn.* The nibble structure itself is **[TouchMCU]**, not something the
+  capture proves: a silent capture is silent however the nibbles are read. What the capture does prove
+  is coverage - eight strips addressed, none of them piled onto one - and that an earlier version of
+  this file, which put the strip in the status byte, had to be wrong. The level table below remains
+  **[TouchMCU]**.
 - Levels: `0x0` silent … `0x4` (-30 dB) … `0x6` (-14 dB) … `0x8` (-8 dB) … `0xB` (>= -2 dB) …
   `0xC` (0 dB / clip) · `0xE` set overload · `0xF` clear overload. **[TouchMCU]**
 - Decay is automatic, about 300 ms per division. **[TouchMCU]**
 - The same message drives the signal-present LED. **[TouchMCU]**
 
-*Implementing this project:* `src/mcu.rs` currently takes the strip from the status byte and treats
-the whole data byte as the level, which does not match the passage above - worth fixing before the
-meters are trusted.
+*Implementing this project:* fixed. `src/mcu.rs` takes the strip from the high nibble and the level
+from the low one, the unit tests feed the bytes of Reaper's own capture, and `tests/mcu_capture.rs`
+asserts that all eight strips are addressed. Nothing draws the meters yet, so the fix is invisible on
+screen - worth remembering when the panel grows one.
 
 ## 6. Displays
 

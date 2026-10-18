@@ -51,7 +51,10 @@ pub enum Message {
     /// channel, 14 bits, the ninth being the master.
     Fader { channel: u8, value: i16 },
     /// A meter level, one per channel, and by far the most traffic.
-    Level { channel: u8, value: u8 },
+    /// A meter, on the strip's channel pressure. The strip is the *high* nibble
+    /// of the data byte and the level the low one: `0xD0 0x35` is strip 3 at
+    /// level 5, not channel 0 at level 0x35.
+    Level { strip: u8, level: u8 },
     /// The V-Pot's ring: where a strip's pan is, as the DAW sees it. The only
     /// pan feedback there is - see `knobs::pan_from_dot`.
     Ring { strip: u8, dot: u8 },
@@ -165,8 +168,8 @@ fn decode(status: u8, data: [u8; 2]) -> Message {
             lit: data[1] != 0,
         },
         0xd0 => Message::Level {
-            channel,
-            value: data[0],
+            strip: data[0] >> 4,
+            level: data[0] & 0x0f,
         },
         0xe0 => Message::Fader {
             channel,
@@ -178,7 +181,11 @@ fn decode(status: u8, data: [u8; 2]) -> Message {
         0xb0 if (PAN_RING_CC_FIRST..PAN_RING_CC_FIRST + BANK_CHANNELS as u8).contains(&data[0]) => {
             Message::Ring {
                 strip: data[0] - PAN_RING_CC_FIRST,
-                dot: data[1],
+                // Not a plain position: bits 0-3 hold the dot, bits 4-5 the ring
+                // mode (Reaper only ever used mode 0, a single dot), bit 6 the
+                // LED under the encoder. The panel draws a dot, so the rest is
+                // masked off rather than read.
+                dot: data[1] & 0x0f,
             }
         },
         0xb0 if (PAN_CC_FIRST..PAN_CC_FIRST + BANK_CHANNELS as u8).contains(&data[0]) => {
@@ -326,10 +333,10 @@ impl Decoder {
                     self.mirror();
                 }
             }
-            Message::Level { channel, value } => {
-                let index = *channel as usize;
+            Message::Level { strip, level } => {
+                let index = *strip as usize;
                 if index < BANK_CHANNELS {
-                    self.levels[index] = *value;
+                    self.levels[index] = *level;
                 }
             }
             // The display is written one digit at a time, and the two texts the
@@ -640,9 +647,52 @@ mod tests {
     #[test]
     fn the_meter_levels_are_kept_per_channel() {
         let mut decoder = Decoder::new();
-        feed(&mut decoder, &[0xd2, 15, 0xd5, 96]);
+        // The strip is the high nibble of the data byte and the level the low
+        // one. This test used to feed 0xd2 and 0xd5 - the strip in the status
+        // byte - with a level of 96, which a nibble cannot hold. That was the
+        // bug the protocol reference caught.
+        feed(&mut decoder, &[0xd0, 0x2f, 0xd0, 0x56]);
         assert_eq!(decoder.levels()[2], 15);
-        assert_eq!(decoder.levels()[5], 96);
+        assert_eq!(decoder.levels()[5], 6);
+    }
+
+    #[test]
+    fn a_meter_sweep_addresses_every_strip_instead_of_one() {
+        // What Reaper actually sends, all through the capture: D0 00, D0 10,
+        // D0 20 ... D0 70. Read as a status-byte channel that is one strip with a
+        // rising level; read properly it is eight strips, each silent, which is
+        // what a meter bank looks like when nothing is playing.
+        let mut decoder = Decoder::new();
+        for strip in 0..8u8 {
+            feed(&mut decoder, &[0xd0, strip << 4]);
+        }
+        for strip in 0..BANK_CHANNELS {
+            assert_eq!(decoder.levels()[strip], 0);
+        }
+        // And the low nibble is a level, not part of the strip.
+        feed(&mut decoder, &[0xd0, 0x35]);
+        assert_eq!(decoder.levels()[3], 5);
+        assert_eq!(decoder.levels()[0], 0);
+    }
+
+    #[test]
+    fn a_ring_byte_carries_the_mode_and_the_led_as_well_as_the_dot() {
+        // 0x46: dot 6, mode 0, the LED under the encoder lit. Only the dot is
+        // drawn, so only the dot is kept - but the rest must not leak into it.
+        match decode(0xb0, [0x30, 0x46]) {
+            Message::Ring { strip, dot } => {
+                assert_eq!(strip, 0);
+                assert_eq!(dot, 6);
+            }
+            _ => panic!("expected a ring"),
+        }
+        match decode(0xb0, [0x37, 0x3f]) {
+            Message::Ring { strip, dot } => {
+                assert_eq!(strip, 7);
+                assert_eq!(dot, 15);
+            }
+            _ => panic!("expected a ring"),
+        }
     }
 
     #[test]
