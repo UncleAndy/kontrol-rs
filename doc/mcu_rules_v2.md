@@ -261,10 +261,22 @@ The full dance, device's point of view **[TouchMCU]**:
    on the real hardware the latter puts "SECURITY UNLOCK FAILED SHUTTING DOWN" on the display and it
    stops accepting messages entirely.
 
-*Implementing this project:* Reaper does none of the above - no `0x00`, `0x01` or `0x02` appears in
-the capture at all - so the surface works without it. Another DAW may ask, and nothing here answers
-yet. When implementing it, note the direction: `0x00` is what the *host* sends, and it is the device
-that speaks first with `0x01`.
+*Implementing this project:* implemented. `src/mcu.rs` answers a Device Query with the serial
+`KMPL-01` and a fixed challenge, confirms a Host Connection Reply with `0x03`, and `response_for`
+carries the algorithm above - checked in a unit test against this very challenge, which comes out as
+`40 1f 53 72`. `McuInput::read_into` sends the answer the moment the query arrives, so the exchange
+never waits for a UI turn.
+
+Two deliberate choices, both a one-line reversal if they ever need changing. The host's response is
+*not* enforced: the confirmation goes out whether the arithmetic agrees or not, because the point of
+this is to be let in, and a mismatch is likelier to mean the two sides disagree about the formula
+than to be a host worth turning away. And the surface does not announce itself unprompted at power-on
+the way a real MCU does - Reaper never asks anything, so there was nothing to gain and one stray
+SysEx to explain.
+
+Reaper does none of the above - no `0x00`, `0x01` or `0x02` appears in the capture, and
+`tests/mcu_capture.rs` now asserts that it never does. The direction is worth repeating, because it
+is easy to get backwards: `0x00` is what the *host* sends, and the device answers with `0x01`.
 
 ## 9. Operational Requirements for Generated Code
 

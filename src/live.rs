@@ -55,10 +55,16 @@ pub fn watch_for_interrupts() {
     }
 }
 
-/// How long the loop waits for the keyboard before it looks at the DAW again.
-/// Nothing is lost by waiting: the DAW's queue is drained in full each time round,
-/// and no message is older than this.
-const KEYBOARD_WAIT_MILLIS: i32 = 20;
+/// How long the loop waits for the keyboard before it looks at the DAW again,
+/// and so also the ceiling on one turn of the loop.
+///
+/// Five, not twenty, and the reason is not the keyboard. The DAW's queue is
+/// drained in full each time round, so what this number really sets is how long
+/// the *sequencer's pool* is left to fill between drains - and while it is full
+/// it is the DAW's own writes that block, which is what a freeze in its
+/// transport looks like from the outside. A turn that costs more wake-ups costs
+/// nothing measurable; a pool that overflows costs whole seconds.
+const KEYBOARD_WAIT_MILLIS: i32 = 5;
 
 /// How often the keyboard is looked for again after it went away. Twice a
 /// second: quick enough to feel immediate, slow enough to cost nothing, since

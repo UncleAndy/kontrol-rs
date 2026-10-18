@@ -36,6 +36,68 @@ pub const CLICK_LED: u8 = 89;
 const SYSEX_HEADER: [u8; 5] = [0xf0, 0x00, 0x00, 0x66, 0x14];
 const LCD_WRITE: u8 = 0x12;
 
+/// Device Query: the host asking the surface who it is.
+const DEVICE_QUERY: u8 = 0x00;
+/// Host Connection Query, our answer to one: serial and a challenge.
+const HOST_QUERY: u8 = 0x01;
+/// Host Connection Reply: the host's answer to our challenge.
+const HOST_REPLY: u8 = 0x02;
+/// Host Connection Confirmation, which is what we send back.
+const HOST_CONFIRM: u8 = 0x03;
+
+/// The seven ASCII bytes of the serial number the protocol has a surface
+/// announce. Ours, not Mackie's: nothing depends on its value.
+const SERIAL: [u8; 7] = *b"KMPL-01";
+
+/// The four bytes of the challenge we send.
+///
+/// Fixed on purpose. A host computes its response from these bytes, and the same
+/// bytes are what a response could be checked against, so a fixed challenge
+/// costs nothing - and it makes the exchange reproducible when something is
+/// wrong.
+const CHALLENGE: [u8; 4] = [0x4b, 0x4f, 0x4d, 0x50];
+
+/// The response a host is expected to send for a challenge, from the algorithm
+/// in the protocol reference:
+///
+/// ```text
+/// r[0] = 0x7F & ( c[0] + ( c[1] ^ 0x0A ) - c[3] )
+/// r[1] = 0x7F & ( ( c[2] >> 4 ) ^ ( c[0] + c[3] ) )
+/// r[2] = 0x7F & ( c[3] - ( c[2] << 2 ) ^ ( c[0] | c[1] ) )
+/// r[3] = 0x7F & ( c[1] - c[2] + ( 0xF0 ^ ( c[3] << 4 ) ) )
+/// ```
+pub fn response_for(challenge: [u8; 4]) -> [u8; 4] {
+    let c = challenge.map(i32::from);
+    [
+        (0x7F & (c[0] + (c[1] ^ 0x0A) - c[3])) as u8,
+        (0x7F & ((c[2] >> 4) ^ (c[0] + c[3]))) as u8,
+        (0x7F & ((c[3] - (c[2] << 2)) ^ (c[0] | c[1]))) as u8,
+        (0x7F & (c[1] - c[2] + (0xF0 ^ (c[3] << 4)))) as u8,
+    ]
+}
+
+/// Host Connection Query: our serial and our challenge, in the order the
+/// protocol puts them.
+fn host_connection_query() -> Vec<u8> {
+    let mut reply = Vec::with_capacity(SYSEX_HEADER.len() + 12);
+    reply.extend_from_slice(&SYSEX_HEADER);
+    reply.push(HOST_QUERY);
+    reply.extend_from_slice(&SERIAL);
+    reply.extend_from_slice(&CHALLENGE);
+    reply.push(0xf7);
+    reply
+}
+
+/// Host Connection Confirmation: our serial, and nothing else.
+fn host_connection_confirmation() -> Vec<u8> {
+    let mut reply = Vec::with_capacity(SYSEX_HEADER.len() + 9);
+    reply.extend_from_slice(&SYSEX_HEADER);
+    reply.push(HOST_CONFIRM);
+    reply.extend_from_slice(&SERIAL);
+    reply.push(0xf7);
+    reply
+}
+
 /// Characters in one LCD name field, which is also the step between offsets: a
 /// field starts at 0, 7, 14 ... 49 and holds seven characters.
 pub const NAME_FIELD: usize = 7;
@@ -72,6 +134,12 @@ pub enum Message {
     /// character. The value is the character with bit 6 as the dot, and zero
     /// means that digit is dark.
     Display { digit: u8, value: u8 },
+    /// The host asking who we are: the port answers it with a Host Connection
+    /// Query, serial and challenge both.
+    DeviceQuery,
+    /// The host's answer to our challenge. The bytes are not kept: see the arm
+    /// in the decoder for why the confirmation goes out regardless.
+    HostReply,
     /// Something the screen has no use for yet: the V-Pot ring modes on
     /// 0x30..0x37, the 0x20 command, and the notes that only blink.
     Other,
@@ -203,11 +271,19 @@ fn decode(status: u8, data: [u8; 2]) -> Message {
 }
 
 fn decode_sysex(bytes: &[u8]) -> Message {
-    if bytes.len() < SYSEX_HEADER.len() + 2 || bytes[..SYSEX_HEADER.len()] != SYSEX_HEADER {
+    if bytes.len() < SYSEX_HEADER.len() + 1 || bytes[..SYSEX_HEADER.len()] != SYSEX_HEADER {
         return Message::Other;
     }
-    if bytes[SYSEX_HEADER.len()] != LCD_WRITE {
-        return Message::Other;
+    match bytes[SYSEX_HEADER.len()] {
+        // The host asking who we are, and the host answering our challenge: the
+        // only two commands a surface ever answers on its own, and the two that
+        // carry no payload of their own at all.
+        DEVICE_QUERY => return Message::DeviceQuery,
+        HOST_REPLY => return Message::HostReply,
+        // An LCD write carries an offset byte after the command, so it has to
+        // be one longer than the two above before its body makes sense.
+        LCD_WRITE if bytes.len() >= SYSEX_HEADER.len() + 2 => {}
+        _ => return Message::Other,
     }
 
     let offset = bytes[SYSEX_HEADER.len() + 1];
@@ -248,6 +324,9 @@ pub struct Decoder {
     /// page draws fader positions, and this is where a level display would
     /// take them from.
     levels: [u8; BANK_CHANNELS],
+    /// A handshake reply waiting to be sent. The parser cannot send anything by
+    /// itself, so a Device Query leaves its answer here for the port to take.
+    handshake: Option<Vec<u8>>,
     /// Which strip the DAW has selected, once it has said.
     selected: Option<usize>,
     /// The DAW's own display row, kept as digits so one update cannot disturb
@@ -271,6 +350,7 @@ impl Decoder {
             studio: Studio::empty(),
             arms: [false; BANK_CHANNELS],
             levels: [0; BANK_CHANNELS],
+            handshake: None,
             selected: None,
             digits: Digits::default(),
             layout,
@@ -293,6 +373,16 @@ impl Decoder {
     /// The meter levels of the bank, one per channel.
     pub fn levels(&self) -> &[u8; BANK_CHANNELS] {
         &self.levels
+    }
+
+    /// Take a handshake reply the parser produced, if one is waiting.
+    ///
+    /// The parser has no output of its own: a Device Query has to be answered
+    /// through the port that does the sending, so the bytes are parked here for
+    /// `McuInput::read_into` to pick up - and taken once, so an answer is never
+    /// sent twice.
+    pub fn take_handshake_reply(&mut self) -> Option<Vec<u8>> {
+        self.handshake.take()
     }
 
     /// The record-arm state of the bank's channels.
@@ -324,6 +414,20 @@ impl Decoder {
                     self.studio.bank[index].pan_known = true;
                     self.mirror();
                 }
+            }
+            Message::DeviceQuery => {
+                // The host asked who we are: answer with the serial and the
+                // challenge, which is what a real surface does at power-on as
+                // well. The port sends it - see `take_handshake_reply`.
+                self.handshake = Some(host_connection_query());
+            }
+            Message::HostReply => {
+                // The host answered the challenge. `response_for` knows what the
+                // answer should have been, and the answer is deliberately not
+                // enforced: the point of this is to be let in, and a mismatch is
+                // far more likely to mean the two sides disagree about the
+                // arithmetic than a host that ought to be turned away.
+                self.handshake = Some(host_connection_confirmation());
             }
             Message::Pan { strip, value } => {
                 let index = *strip as usize;
@@ -642,6 +746,61 @@ mod tests {
         assert!(decoder.studio().looping);
         feed(&mut decoder, &[0x90, 89, 127]);
         assert!(decoder.studio().click);
+    }
+
+    #[test]
+    fn a_device_query_is_answered_with_the_serial_and_a_challenge() {
+        let reply = host_connection_query();
+        assert_eq!(reply.len(), SYSEX_HEADER.len() + 13);
+        assert_eq!(reply[..SYSEX_HEADER.len()], SYSEX_HEADER);
+        assert_eq!(reply[SYSEX_HEADER.len()], HOST_QUERY);
+        assert_eq!(
+            &reply[SYSEX_HEADER.len() + 1..SYSEX_HEADER.len() + 8],
+            &SERIAL
+        );
+        assert_eq!(
+            &reply[SYSEX_HEADER.len() + 8..SYSEX_HEADER.len() + 12],
+            &CHALLENGE
+        );
+        assert_eq!(*reply.last().unwrap(), 0xf7);
+
+        let confirm = host_connection_confirmation();
+        assert_eq!(confirm[SYSEX_HEADER.len()], HOST_CONFIRM);
+        assert_eq!(
+            &confirm[SYSEX_HEADER.len() + 1..SYSEX_HEADER.len() + 8],
+            &SERIAL
+        );
+        assert_eq!(*confirm.last().unwrap(), 0xf7);
+    }
+
+    #[test]
+    fn the_response_algorithm_matches_the_reference() {
+        // Worked out from the pseudo code in the reference for this very
+        // challenge, so a slip in the arithmetic cannot pass unnoticed.
+        assert_eq!(response_for(CHALLENGE), [0x40, 0x1f, 0x53, 0x72]);
+    }
+
+    #[test]
+    fn a_device_query_through_the_decoder_leaves_one_reply_to_send() {
+        let mut decoder = Decoder::new();
+        let query = [0xf0, 0x00, 0x00, 0x66, 0x14, 0x00, 0xf7];
+        feed(&mut decoder, &query);
+        let reply = decoder.take_handshake_reply().expect("the query went unanswered");
+        assert_eq!(reply[SYSEX_HEADER.len()], HOST_QUERY);
+        assert!(
+            decoder.take_handshake_reply().is_none(),
+            "the same answer was left waiting twice"
+        );
+
+        // And the host's reply to the challenge is confirmed.
+        feed(
+            &mut decoder,
+            &[0xf0, 0x00, 0x00, 0x66, 0x14, 0x02, 0x40, 0x1f, 0x53, 0x72, 0xf7],
+        );
+        let confirm = decoder
+            .take_handshake_reply()
+            .expect("the host's reply went unconfirmed");
+        assert_eq!(confirm[SYSEX_HEADER.len()], HOST_CONFIRM);
     }
 
     #[test]

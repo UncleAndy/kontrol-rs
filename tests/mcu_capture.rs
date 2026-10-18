@@ -93,6 +93,12 @@ fn the_decoder_reads_reapers_own_stream() {
                     statuses += 1;
                 }
                 Message::Display { .. } => digits += 1,
+                // Reaper does not do the handshake at all: no Device Query, no
+                // Host Connection Reply in any window. If one turns up here,
+                // then something other than Reaper wrote to the port.
+                Message::DeviceQuery | Message::HostReply => {
+                    panic!("the capture has handshake traffic in it")
+                }
                 Message::Other => others += 1,
             }
         }

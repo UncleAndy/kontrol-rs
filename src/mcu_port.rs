@@ -42,8 +42,12 @@ pub const MIDI_MESSAGE_MAX: u32 = 64;
 
 /// How much room this client asks the sequencer for, in the units ALSA uses for
 /// a pool (its own figures are small, and its defaults are sized for a trickle).
-/// Best effort: the number is a margin, not the cure - draining the queue is.
-const CLIENT_POOL_SIZE: u32 = 2000;
+///
+/// Far larger than the traffic needs, on purpose: a DAW sends meters by the
+/// hundred a second and asks nobody's leave first, and the pool filling up is
+/// the only thing in this program that can make the *DAW* wait. Best effort
+/// still - the number is a margin, not the cure. Draining the queue is.
+const CLIENT_POOL_SIZE: u32 = 8192;
 
 /// What one read did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -564,6 +568,20 @@ impl McuInput {
                             decoder.push(byte);
                         }
                         read.messages += 1;
+                        // A Device Query is answered here, because the parser
+                        // cannot send and the host is waiting for the answer.
+                        // `Other` traffic is logged and forgotten; this is the
+                        // one thing that has to leave as soon as it arrives.
+                        if let Some(reply) = decoder.take_handshake_reply() {
+                            if self.log {
+                                println!("[mcu] out {:02x?}", reply);
+                            }
+                            if let Err(reason) = self.send(&reply) {
+                                if self.log {
+                                    println!("[mcu] handshake reply failed: {reason}");
+                                }
+                            }
+                        }
                     }
                 }
                 // Nothing left: this is how a non-blocking drain ends, not an
@@ -571,7 +589,19 @@ impl McuInput {
                 Err(err) if err.errno() == libc::EAGAIN => return Ok(read),
                 Err(err) if err.errno() == libc::ENOSPC => {
                     read.overflowed = true;
-                    if self.pending(&mut input)? == 0 {
+                    let still = self.pending(&mut input)?;
+                    // Said out loud, and deliberately not once: the pool was
+                    // full, which is the one thing our reading pace can do to the
+                    // DAW - while the pool is full it is the DAW's own writes
+                    // that block, and that is what a freeze in its transport
+                    // looks like from the outside.
+                    if self.log {
+                        println!(
+                            "[mcu] the sequencer's event pool was full: {still} more waited, \
+                             and the DAW blocks on its own writes until they are taken"
+                        );
+                    }
+                    if still == 0 {
                         return Ok(read);
                     }
                 }
